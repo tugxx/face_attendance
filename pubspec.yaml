@@ -44,6 +44,8 @@ dependencies:
   permission_handler: ^12.0.1
   google_mlkit_face_detection: ^0.13.1
   universal_html: ^2.2.4
+  tflite_flutter: ^0.11.0
+  image_picker: ^1.2.1
 
 dev_dependencies:
   flutter_test:
@@ -66,6 +68,10 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  # Thêm đoạn này vào (Chú ý thụt đầu dòng thẳng hàng với uses-material-design)
+  assets:
+    - assets/models/mobilefacenet.tflite
 
   # To add assets to your application, add an assets section, like this:
   # assets:
