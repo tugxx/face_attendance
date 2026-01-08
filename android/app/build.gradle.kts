@@ -42,6 +42,12 @@ android {
         noCompress += "tflite"
         noCompress += "lite"
     }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+        }
+    }
 }
 
 flutter {

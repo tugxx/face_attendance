@@ -1,0 +1,1 @@
+{"model_info":{"name":"mobilefacenet.tflite","input_size":112,"output_dim":192,"file_size_mb":4.99},"performance":{"total_images":17,"total_time_ms":10983,"avg_ms_per_image":646.1},"quality_metrics":{"avg_intra_sim":0.799,"avg_inter_sim":0.2594,"quality_margin":0.5397}}

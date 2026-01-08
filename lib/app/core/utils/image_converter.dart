@@ -3,303 +3,114 @@ import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
 
-import '../../data/models/camera_image.dart';
+// import '../../data/models/camera_image.dart';
 
 class ImageConverter {
-  static Future<img.Image?> convertCameraImage(CameraImage cameraImage) async {
+  static Future<img.Image?> convertCameraImage(CameraImage image) async {
     try {
-      final startTime = DateTime.now();
+      // Chỉ hỗ trợ Android NV21 (dạng phổ biến nhất)
+      if (Platform.isAndroid && image.format.group == ImageFormatGroup.nv21) {
+        return _convertNV21ToRGB(image);
+      }
+      // Hỗ trợ iOS BGRA8888
+      else if (Platform.isIOS &&
+          image.format.group == ImageFormatGroup.bgra8888) {
+        return _convertBGRA8888ToRGB(image);
+      }
 
-      // DEBUG: Kiểm tra format đầu vào ngay tại Main Thread
-      debugPrint(
-        "📸 Input Format: ${cameraImage.format.group}, Planes: ${cameraImage.planes.length}",
-      );
-
-      debugPrint("STEP 1: Bắt đầu copy dữ liệu...");
-      // 1. Copy dữ liệu ở Main Thread (Nhanh, không tốn nhiều CPU)
-      final data = CameraImageData.from(cameraImage);
-
-      debugPrint("STEP 2: Gửi vào Isolate...");
-
-      // 2. Gửi dữ liệu thuần (data) vào Isolate để tính toán nặng
-      final result = await compute(_convertInternal, data);
-
-      if (result == null) return null;
-
-      // 3. Đóng gói thành ảnh tại Main Thread (Rất nhanh vì bytes đã có sẵn)
-      final image = img.Image.fromBytes(
-        width: result.width,
-        height: result.height,
-        bytes: result.rgbaBytes.buffer,
-        order: img
-            .ChannelOrder
-            .rgba, // Quan trọng: Khớp với thứ tự ghi trong Isolate
-      );
-
-      final elapsed = DateTime.now().difference(startTime).inMilliseconds;
-      debugPrint("✅ Convert xong trong: ${elapsed}ms");
-
-      return image;
+      debugPrint("⚠️ Định dạng ảnh không hỗ trợ: ${image.format.group}");
+      return null;
     } catch (e) {
-      debugPrint("Lỗi khi chuẩn bị dữ liệu convert: $e");
+      debugPrint("❌ Lỗi convert ảnh: $e");
       return null;
     }
   }
 
-  static ConversionResult? _convertInternal(CameraImageData data) {
-    try {
-      Uint8List? rawBytes;
+  // --- LOGIC CHUYỂN ĐỔI MỚI (Dùng thư viện ảnh chuẩn) ---
 
-      if (Platform.isAndroid) {
-        if (data.planes.length == 3) {
-          rawBytes = _yuv420ToRgbaBytes(data);
-        } else if (data.planes.length == 1) {
-          rawBytes = _nv21ToRgbaBytes(data);
+  // 1. Cho Android (NV21)
+  static img.Image _convertNV21ToRGB(CameraImage image) {
+    final int width = image.width;
+    final int height = image.height;
+    final img.Image rgbImage = img.Image(width: width, height: height);
+
+    // TRƯỜNG HỢP 1: Máy cũ (Redmi 5 Plus) trả về 1 cục byte duy nhất chứa cả Y và UV
+    if (image.planes.length == 1) {
+      final Uint8List bytes = image.planes[0].bytes;
+      final int uvOffset = width * height; // UV bắt đầu ngay sau vùng Y
+
+      for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+          final int yIndex = y * width + x;
+
+          // Tính chỉ số UV (NV21: V trước, U sau)
+          // UV giảm mẫu 2x2, nên chia đôi tọa độ
+          final int uvIndex = uvOffset + (y >> 1) * width + (x & ~1);
+
+          // Kiểm tra bounds để tránh crash (quan trọng cho máy cũ)
+          if (yIndex >= bytes.length || uvIndex + 1 >= bytes.length) {
+            continue;
+          }
+
+          final int yp = bytes[yIndex];
+          final int vp = bytes[uvIndex]; // V nằm trước
+          final int up = bytes[uvIndex + 1]; // U nằm sau
+
+          _yuvToRgb(yp, up, vp, x, y, rgbImage);
         }
-      } else if (Platform.isIOS) {
-         // iOS BGRA -> RGBA (Hoặc giữ nguyên tùy logic)
-         if (data.planes.isNotEmpty) {
-           // iOS thường là BGRA, ta trả về luôn để Image.fromBytes xử lý
-           return ConversionResult(data.width, data.height, data.planes[0].bytes);
-         }
-      }
-
-      // Fallback
-      if (rawBytes == null) {
-         if (data.planes.length == 3) rawBytes = _yuv420ToRgbaBytes(data);
-         if (data.planes.length == 1) rawBytes = _nv21ToRgbaBytes(data);
-      }
-
-      if (rawBytes != null) {
-        return ConversionResult(data.width, data.height, rawBytes);
-      }
-      
-      debugPrint("⚠️ Format lạ: ${data.formatGroup}, Planes: ${data.planes.length}");
-      return null;
-
-    } catch (e, stack) {
-      debugPrint("❌ CRASH Isolate: $e");
-      debugPrint(stack.toString());
-      return null;
-    }
-  }
-
-  static Uint8List _nv21ToRgbaBytes(CameraImageData data) {
-    final width = data.width;
-    final height = data.height;
-    final bytes = data.planes[0].bytes;
-    final int uvRowStride = data.planes[0].bytesPerRow;
-    final int uvPixelStride = 2;
-
-    // Tạo mảng đích: width * height * 4 kênh màu (R, G, B, A)
-    final Uint8List rgba = Uint8List(width * height * 4);
-    
-    // Tối ưu vòng lặp
-    int byteIndex = 0;
-
-    for (int y = 0; y < height; y++) {
-      // Tính sẵn các biến không đổi trong hàng
-      final int uvRowIndex = (height * uvRowStride) + (y >> 1) * uvRowStride;
-      final int yRowIndex = y * uvRowStride;
-
-      for (int x = 0; x < width; x++) {
-        final int uvIndex = uvRowIndex + (x >> 1) * uvPixelStride;
-        final int yIndex = yRowIndex + x;
-
-        // Bounds Check nhanh
-        if (yIndex >= bytes.length || uvIndex >= bytes.length - 1) {
-          // Điền màu đen nếu lỗi
-          rgba[byteIndex++] = 0; // R
-          rgba[byteIndex++] = 0; // G
-          rgba[byteIndex++] = 0; // B
-          rgba[byteIndex++] = 255; // A
-          continue;
-        }
-
-        final yp = bytes[yIndex];
-        final vp = bytes[uvIndex];      // V
-        final up = bytes[uvIndex + 1];  // U
-
-        // Convert YUV -> RGB
-        // Dùng phép dịch bit (bit shift) và số nguyên để tối ưu tốc độ thay vì số thực
-        int r = (yp + (vp - 128) * 1436 ~/ 1024 - 179).clamp(0, 255);
-        int g = (yp - (up - 128) * 46549 ~/ 131072 + 44 - (vp - 128) * 93604 ~/ 131072 + 91).clamp(0, 255);
-        int b = (yp + (up - 128) * 1814 ~/ 1024 - 227).clamp(0, 255);
-
-        // Ghi trực tiếp vào mảng byte (Nhanh gấp 10 lần setPixelRgb)
-        rgba[byteIndex++] = r;
-        rgba[byteIndex++] = g;
-        rgba[byteIndex++] = b;
-        rgba[byteIndex++] = 255; // Alpha
       }
     }
-    return rgba;
-  }
+    // TRƯỜNG HỢP 2: Máy tiêu chuẩn trả về Plane riêng biệt (Y riêng, UV riêng)
+    else {
+      final Uint8List yPlane = image.planes[0].bytes;
+      final Uint8List uvPlane = image.planes[1].bytes;
+      final int uvRowStride = image.planes[1].bytesPerRow;
+      final int uvPixelStride = image.planes[1].bytesPerPixel ?? 2;
 
-  // --- LOGIC YUV420 (3 Planes) -> RGBA Bytes ---
-  static Uint8List _yuv420ToRgbaBytes(CameraImageData data) {
-    final width = data.width;
-    final height = data.height;
-    final uvRowStride = data.planes[1].bytesPerRow;
-    final uvPixelStride = data.planes[1].bytesPerPixel ?? 1;
+      for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+          final int yIndex = y * width + x;
+          final int uvIndex = (y >> 1) * uvRowStride + (x >> 1) * uvPixelStride;
 
-    final yBytes = data.planes[0].bytes;
-    final uBytes = data.planes[1].bytes;
-    final vBytes = data.planes[2].bytes;
+          final int yp = yPlane[yIndex];
+          final int vp = uvPlane[uvIndex]; // V
+          final int up = uvPlane[uvIndex + 1]; // U
 
-    final Uint8List rgba = Uint8List(width * height * 4);
-    int byteIndex = 0;
-
-    for (int y = 0; y < height; y++) {
-      for (int x = 0; x < width; x++) {
-        final int yIndex = y * width + x;
-        final int uvIndex = uvPixelStride * (x >> 1) + uvRowStride * (y >> 1);
-
-        if (yIndex >= yBytes.length || uvIndex >= uBytes.length || uvIndex >= vBytes.length) {
-           rgba[byteIndex++] = 0; rgba[byteIndex++] = 0; rgba[byteIndex++] = 0; rgba[byteIndex++] = 255;
-           continue;
+          _yuvToRgb(yp, up, vp, x, y, rgbImage);
         }
-
-        final yp = yBytes[yIndex];
-        final up = uBytes[uvIndex];
-        final vp = vBytes[uvIndex];
-
-        int r = (yp + (vp - 128) * 1436 ~/ 1024 - 179).clamp(0, 255);
-        int g = (yp - (up - 128) * 46549 ~/ 131072 + 44 - (vp - 128) * 93604 ~/ 131072 + 91).clamp(0, 255);
-        int b = (yp + (up - 128) * 1814 ~/ 1024 - 227).clamp(0, 255);
-
-        rgba[byteIndex++] = r;
-        rgba[byteIndex++] = g;
-        rgba[byteIndex++] = b;
-        rgba[byteIndex++] = 255;
       }
     }
-    return rgba;
+    return rgbImage;
   }
 
-    // static img.Image? _convertInternal(CameraImageData data) {
-  //   try {
-  //     debugPrint(
-  //       "STEP 3: Đã vào Isolate. Format: ${data.formatGroup}, Planes: ${data.planes.length}",
-  //     );
+  // Hàm tính toán màu chung (Công thức chuẩn)
+  static void _yuvToRgb(int y, int u, int v, int x, int h, img.Image target) {
+    // Nếu U, V = 0 hết (lỗi xanh lè), ta ép về 128 để ra ảnh đen trắng (Grayscale)
+    // Ảnh đen trắng AI vẫn nhận diện tốt, còn ảnh xanh thì không.
+    if (u == 0 && v == 0) {
+      u = 128;
+      v = 128;
+    }
 
-  //     Uint8List? rawBytes;
+    int r = (y + 1.370705 * (v - 128)).round().clamp(0, 255);
+    int g = (y - 0.337633 * (u - 128) - 0.698001 * (v - 128)).round().clamp(
+      0,
+      255,
+    );
+    int b = (y + 1.732446 * (u - 128)).round().clamp(0, 255);
 
-  //     if (Platform.isAndroid) {
-  //       if (data.planes.length == 3) {
-  //         return _convertYuv420ThreePlanes(data);
-  //       } else if (data.planes.length == 1) {
-  //         return _convertNv21OnePlane(data);
-  //       }
-  //     } else if (Platform.isIOS) {
-  //       if (data.formatGroup == ImageFormatGroup.bgra8888 ||
-  //           data.planes.length == 1) {
-  //         return _convertBGRA8888ToImage(data);
-  //       }
-  //     }
+    target.setPixelRgba(x, h, r, g, b, 255);
+  }
 
-  //     if (data.planes.length == 3) return _convertYuv420ThreePlanes(data);
-  //     if (data.planes.length == 1) return _convertNv21OnePlane(data);
-
-  //     debugPrint(
-  //       "⚠️ Unknown Format Structure: Planes=${data.planes.length}, Group=${data.formatGroup}",
-  //     );
-  //     return null;
-  //   } catch (e, stackTrace) {
-  //     debugPrint("Isolate Crash: $e"); // In lỗi nếu có trong isolate
-  //     debugPrint(stackTrace.toString());
-  //     return null;
-  //   }
-  // }
-
-  /// Convert cho Android (YUV420)
-  // static img.Image _convertYuv420ThreePlanes(CameraImageData data) {
-  //   final int width = data.width;
-  //   final int height = data.height;
-  //   final int uvRowStride = data.planes[1].bytesPerRow;
-  //   final int uvPixelStride = data.planes[1].bytesPerPixel ?? 1; // Có thể null
-
-  //   final Uint8List yBytes = data.planes[0].bytes;
-  //   final Uint8List uBytes = data.planes[1].bytes;
-  //   final Uint8List vBytes = data.planes[2].bytes;
-
-  //   var imgBuffer = img.Image(width: width, height: height);
-
-  //   for (int y = 0; y < height; y++) {
-  //     for (int x = 0; x < width; x++) {
-  //       final int yIndex = y * width + x;
-  //       final int uvIndex =
-  //           uvPixelStride * (x / 2).floor() + uvRowStride * (y / 2).floor();
-
-  //       if (yIndex >= yBytes.length ||
-  //           uvIndex >= uBytes.length ||
-  //           uvIndex >= vBytes.length) {
-  //         continue;
-  //       }
-
-  //       final yp = yBytes[yIndex];
-  //       final up = uBytes[uvIndex];
-  //       final vp = vBytes[uvIndex];
-
-  //       _setPixel(imgBuffer, x, y, yp, up, vp);
-  //     }
-  //   }
-  //   return imgBuffer;
-  // }
-
-  // static img.Image _convertNv21OnePlane(CameraImageData data) {
-  //   final width = data.width;
-  //   final height = data.height;
-  //   final bytes = data.planes[0].bytes; // Tất cả dữ liệu nằm trong plane 0
-
-  //   final int uvRowStride = data.planes[0].bytesPerRow;
-  //   final int uvPixelStride = 2;
-
-  //   var imgBuffer = img.Image(width: width, height: height);
-
-  //   for (int y = 0; y < height; y++) {
-  //     for (int x = 0; x < width; x++) {
-  //       final int yIndex = y * uvRowStride + x;
-
-  //       // Công thức NV21 offset
-  //       final int uvIndex =
-  //           (uvRowStride * height) +
-  //           (y ~/ 2) * uvRowStride +
-  //           (x ~/ 2) * uvPixelStride;
-
-  //       // Bounds Check an toàn
-  //       if (yIndex >= bytes.length || uvIndex >= bytes.length - 1) continue;
-
-  //       final yp = bytes[yIndex];
-
-  //       // NV21 thường là V trước U sau (hoặc ngược lại tùy máy, nhưng cứ lấy cặp là có màu)
-  //       final vp = bytes[uvIndex];
-  //       final up = bytes[uvIndex + 1];
-
-  //       _setPixel(imgBuffer, x, y, yp, up, vp);
-  //     }
-  //   }
-  //   return imgBuffer;
-  // }
-
-  // /// Convert cho iOS (BGRA8888)
-  // static img.Image _convertBGRA8888ToImage(CameraImageData data) {
-  //   return img.Image.fromBytes(
-  //     width: data.width,
-  //     height: data.height,
-  //     bytes: data.planes[0].bytes.buffer,
-  //     order: img.ChannelOrder.bgra,
-  //   );
-  // }
-
-  // // Hàm phụ để tính toán RGB và gán vào ảnh
-  // static void _setPixel(img.Image image, int x, int y, int yp, int up, int vp) {
-  //   int r = (yp + (vp - 128) * 1.402).toInt();
-  //   int g = (yp - (up - 128) * 0.34414 - (vp - 128) * 0.71414).toInt();
-  //   int b = (yp + (up - 128) * 1.772).toInt();
-
-  //   image.setPixelRgb(x, y, r.clamp(0, 255), g.clamp(0, 255), b.clamp(0, 255));
-  // }
+  // 2. Cho iOS (BGRA8888) - Đơn giản hơn nhiều
+  static img.Image _convertBGRA8888ToRGB(CameraImage image) {
+    return img.Image.fromBytes(
+      width: image.width,
+      height: image.height,
+      bytes: image.planes[0].bytes.buffer,
+      order: img.ChannelOrder.bgra, // iOS dùng BGRA
+    );
+  }
 
   /// Cắt (Crop) khuôn mặt từ ảnh gốc dựa trên BoundingBox
   static img.Image cropFace(

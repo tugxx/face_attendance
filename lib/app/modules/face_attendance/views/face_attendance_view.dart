@@ -13,13 +13,13 @@ class FaceAttendanceView extends GetView<FaceAttendanceController> {
     return Scaffold(
       backgroundColor: Colors.black,
 
-      // --- NÚT ĐĂNG KÝ (Floating Action Button) ---
-      // Sửa lỗi sort_child_properties_last: child để cuối cùng
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => _showRegisterDialog(controller),
-        backgroundColor: Colors.blue,
-        child: const Icon(Icons.add_a_photo),
-      ),
+      // // --- NÚT ĐĂNG KÝ (Floating Action Button) ---
+      // // Sửa lỗi sort_child_properties_last: child để cuối cùng
+      // floatingActionButton: FloatingActionButton(
+      //   onPressed: () => _showRegisterDialog(controller),
+      //   backgroundColor: Colors.blue,
+      //   child: const Icon(Icons.add_a_photo),
+      // ),
 
       body: Obx(() {
         // 1. Xử lý lỗi
@@ -72,42 +72,42 @@ class FaceAttendanceView extends GetView<FaceAttendanceController> {
     );
   }
 
-  void _showRegisterDialog(FaceAttendanceController controller) {
-    final TextEditingController nameController = TextEditingController();
+  // void _showRegisterDialog(FaceAttendanceController controller) {
+  //   final TextEditingController nameController = TextEditingController();
     
-    Get.defaultDialog(
-      title: "Đăng ký khuôn mặt",
-      titleStyle: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-      content: Column(
-        children: [
-          const Icon(Icons.face, size: 50, color: Colors.blue),
-          const SizedBox(height: 10),
-          const Text("Giữ khuôn mặt trong khung hình\nvà nhập tên bên dưới:", textAlign: TextAlign.center),
-          const SizedBox(height: 15),
-          TextField(
-            controller: nameController,
-            decoration: const InputDecoration(
-              border: OutlineInputBorder(),
-              labelText: "Nhập tên nhân viên",
-              prefixIcon: Icon(Icons.person),
-            ),
-          ),
-        ],
-      ),
-      textConfirm: "Lưu",
-      textCancel: "Hủy",
-      confirmTextColor: Colors.white,
-      onConfirm: () {
-        if (nameController.text.trim().isNotEmpty) {
-          // Gọi hàm đăng ký trong controller
-          controller.registerCurrentFace(nameController.text.trim());
-          Get.back();
-        } else {
-          Get.snackbar("Lỗi", "Vui lòng nhập tên", snackPosition: SnackPosition.BOTTOM);
-        }
-      },
-    );
-  }
+  //   Get.defaultDialog(
+  //     title: "Đăng ký khuôn mặt",
+  //     titleStyle: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+  //     content: Column(
+  //       children: [
+  //         const Icon(Icons.face, size: 50, color: Colors.blue),
+  //         const SizedBox(height: 10),
+  //         const Text("Giữ khuôn mặt trong khung hình\nvà nhập tên bên dưới:", textAlign: TextAlign.center),
+  //         const SizedBox(height: 15),
+  //         TextField(
+  //           controller: nameController,
+  //           decoration: const InputDecoration(
+  //             border: OutlineInputBorder(),
+  //             labelText: "Nhập tên nhân viên",
+  //             prefixIcon: Icon(Icons.person),
+  //           ),
+  //         ),
+  //       ],
+  //     ),
+  //     textConfirm: "Lưu",
+  //     textCancel: "Hủy",
+  //     confirmTextColor: Colors.white,
+  //     onConfirm: () {
+  //       if (nameController.text.trim().isNotEmpty) {
+  //         // Gọi hàm đăng ký trong controller
+  //         controller.registerCurrentFace(nameController.text.trim());
+  //         Get.back();
+  //       } else {
+  //         Get.snackbar("Lỗi", "Vui lòng nhập tên", snackPosition: SnackPosition.BOTTOM);
+  //       }
+  //     },
+  //   );
+  // }
 
   Widget _buildOverlayUI() {
     return Positioned(

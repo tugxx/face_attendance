@@ -46,6 +46,13 @@ dependencies:
   universal_html: ^2.2.4
   tflite_flutter: ^0.11.0
   image_picker: ^1.2.1
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+  http: ^1.2.0
+  archive: ^4.0.7
+  flutter_image_compress: ^2.3.0
+  ffi: ^2.1.4
+  opencv_dart: ^1.0.0
 
 dev_dependencies:
   flutter_test:
@@ -71,7 +78,9 @@ flutter:
 
   # Thêm đoạn này vào (Chú ý thụt đầu dòng thẳng hàng với uses-material-design)
   assets:
-    - assets/models/mobilefacenet.tflite
+    - assets/models/
+    - assets/dataset.zip
+    - assets/face_db.json
 
   # To add assets to your application, add an assets section, like this:
   # assets:

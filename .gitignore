@@ -43,3 +43,11 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+*.assets
+.assets/
+
+/debug_seeder/
+debug_crop_final.jpg
+debug_face.jpg
+

@@ -1,0 +1,1 @@
+{"model_info":{"name":"w600k_mbf_float32.tflite","input_size":112,"output_dim":512,"file_size_mb":6.53},"performance":{"total_images":15,"total_time_ms":29776,"avg_ms_per_image":1985.1},"quality_metrics":{"avg_intra_dist":0.7285,"avg_inter_dist":1.3053,"score_ratio":1.79}}

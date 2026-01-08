@@ -1,0 +1,1 @@
+{"model_info":{"name":"ghostfacenet.tflite","input_size":112,"output_dim":512,"file_size_mb":4.26},"performance":{"total_images":15,"total_time_ms":25616,"avg_ms_per_image":1707.7},"quality_metrics":{"avg_intra_dist":0.6757,"avg_inter_dist":1.217,"score_ratio":1.8}}
