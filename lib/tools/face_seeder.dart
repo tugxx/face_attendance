@@ -1,293 +1,17 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
-import 'dart:math' as math;
 
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:opencv_dart/opencv_dart.dart' as cv;
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
-// import 'package:image/image.dart' as img;
 import 'package:path_provider/path_provider.dart';
-import 'package:http/http.dart' as http;
 import 'package:archive/archive.dart';
-import 'package:tflite_flutter/tflite_flutter.dart';
 
-import '../app/core/services/face_aligner_cv.dart';
-
-class ToolAIService {
-  Interpreter? _interpreter;
-  int _inputSize = 112;
-  int _outputSize = 192;
-
-  TensorType _inputType = TensorType.float32;
-
-  // Tham số Quantization (Dành cho model int8/uint8)
-  double _scale = 1.0;
-  int _zeroPoint = 0;
-
-  static const double normAlpha = 1.0 / 128.0;
-  static const double normBeta = -127.5 / 128.0;
-
-  int get inputSize => _inputSize;
-  int get outputSize => _outputSize;
-
-  static const String modelPath = 'assets/models/mobilefacenet.tflite';
-
-  Future<void> initialize() async {
-    try {
-      // Load Interpreter với options tối ưu cho Android/iOS
-      final options = InterpreterOptions();
-
-      _interpreter = await Interpreter.fromAsset(modelPath, options: options);
-
-      // 1. TỰ ĐỘNG LẤY INPUT SHAPE
-      var inputTensor = _interpreter!.getInputTensor(0);
-      _inputSize = inputTensor.shape[1];
-      _inputType = inputTensor.type;
-
-      // Lấy tham số Quantization (Nếu model là float thì scale=0, zeroPoint=0)
-      if (inputTensor.params.scale > 0) {
-        _scale = inputTensor.params.scale;
-        _zeroPoint = inputTensor.params.zeroPoint;
-      }
-
-      var outputTensor = _interpreter!.getOutputTensor(0);
-      _outputSize = outputTensor.shape[1];
-
-      debugPrint("🧠 AI Model Loaded: $modelPath");
-      debugPrint("   - Input: ${_inputSize}x$_inputSize");
-      debugPrint("   - Input Type: $_inputType");
-      debugPrint("   - Quantization: Scale=$_scale, ZeroPoint=$_zeroPoint");
-      debugPrint("   - Output Vector: $_outputSize dimensions");
-
-      // // --- 3. WARMUP (Tự động theo kiểu dữ liệu) ---
-      // // Tạo buffer input giả lập
-      // Object inputBuffer;
-      // if (_inputType == TensorType.float32) {
-      //   inputBuffer = Float32List(
-      //     1 * _inputSize * _inputSize * 3,
-      //   ).reshape([1, _inputSize, _inputSize, 3]);
-      // } else if (_inputType == TensorType.int8) {
-      //   inputBuffer = Int8List(
-      //     1 * _inputSize * _inputSize * 3,
-      //   ).reshape([1, _inputSize, _inputSize, 3]);
-      // } else {
-      //   // uint8
-      //   inputBuffer = Uint8List(
-      //     1 * _inputSize * _inputSize * 3,
-      //   ).reshape([1, _inputSize, _inputSize, 3]);
-      // }
-
-      // var outputBuffer = List.filled(
-      //   1 * _outputSize,
-      //   0.0,
-      // ).reshape([1, _outputSize]);
-
-      var inputBuffer = Float32List(
-        1 * _inputSize * _inputSize * 3,
-      ).reshape([1, _inputSize, _inputSize, 3]);
-      var outputBuffer = List.filled(
-        _outputSize,
-        0.0,
-      ).reshape([1, _outputSize]);
-
-      _interpreter?.run(inputBuffer, outputBuffer);
-
-      debugPrint("🧠 AI Tool Model loaded. Output: $_outputSize");
-    } catch (e) {
-      debugPrint("❌ Error loading Model: $e");
-    }
-  }
-
-  // Logic Generate Embedding (GIỐNG HỆT APP)
-  List<double> generateEmbedding(cv.Mat alignedMat) {
-    if (_interpreter == null) {
-      debugPrint("⚠️ Model chưa init!");
-      return [];
-    }
-
-    // // 1. Chuẩn hóa Input (Pre-processing)
-    // // Các model InsightFace thường dùng chuẩn: (pixel - 127.5) / 128.0
-    // // Input phải đúng kích thước model yêu cầu (thường là 112x112)
-    // if (image.width != _inputSize || image.height != _inputSize) {
-    //   image = img.copyResize(image, width: _inputSize, height: _inputSize);
-    // }
-
-    // double imageMean = 127.5;
-    // double imageStd = 128.0;
-
-    // // Khởi tạo mảng phẳng (flat array) tùy theo kiểu dữ liệu
-    // List<num> flatInput;
-    // if (_inputType == TensorType.float32) {
-    //   flatInput = Float32List(1 * _inputSize * _inputSize * 3);
-    // } else if (_inputType == TensorType.int8) {
-    //   flatInput = Int8List(1 * _inputSize * _inputSize * 3);
-    // } else {
-    //   flatInput = Uint8List(1 * _inputSize * _inputSize * 3);
-    // }
-
-    // int pixelIndex = 0;
-    // for (var i = 0; i < _inputSize; i++) {
-    //   for (var j = 0; j < _inputSize; j++) {
-    //     var pixel = image.getPixel(j, i);
-
-    //     // Bước A: Tính giá trị Float chuẩn hóa trước
-    //     double r = (pixel.r.toDouble() - imageMean) / imageStd;
-    //     double g = (pixel.g.toDouble() - imageMean) / imageStd;
-    //     double b = (pixel.b.toDouble() - imageMean) / imageStd;
-
-    //     // Bước B: Nếu là model Quantized, chuyển Float -> Int
-    //     // Công thức: q = (f / scale) + zero_point
-    //     if (_inputType != TensorType.float32) {
-    //       flatInput[pixelIndex++] = (r / _scale + _zeroPoint).round().clamp(
-    //         -128,
-    //         255,
-    //       );
-    //       flatInput[pixelIndex++] = (g / _scale + _zeroPoint).round().clamp(
-    //         -128,
-    //         255,
-    //       );
-    //       flatInput[pixelIndex++] = (b / _scale + _zeroPoint).round().clamp(
-    //         -128,
-    //         255,
-    //       );
-    //     } else {
-    //       // Model Float thường
-    //       flatInput[pixelIndex++] = r;
-    //       flatInput[pixelIndex++] = g;
-    //       flatInput[pixelIndex++] = b;
-    //     }
-    //   }
-    // }
-
-    // // 3. Reshape để đưa vào model [1, 112, 112, 3]
-    // Object inputTensorData;
-    // if (flatInput is Float32List) {
-    //   inputTensorData = flatInput.reshape([1, _inputSize, _inputSize, 3]);
-    // } else if (flatInput is Int8List) {
-    //   inputTensorData = flatInput.reshape([1, _inputSize, _inputSize, 3]);
-    // } else {
-    //   inputTensorData = (flatInput as Uint8List).reshape([
-    //     1,
-    //     _inputSize,
-    //     _inputSize,
-    //     3,
-    //   ]);
-    // }
-
-    // // 4. Chuẩn bị Output
-    // // Lưu ý: Ngay cả model Input Int8, thì Output Embedding thường vẫn là Float32
-    // // (trừ khi Full Integer Quantization). Ta cứ hứng bằng Float32, nếu model trả về Int8 thì ta Dequantize sau.
-    // var outputTensor = _interpreter!.getOutputTensor(0);
-    // List<dynamic> outputBuffer; // Dùng dynamic để linh hoạt
-
-    // if (outputTensor.type == TensorType.float32) {
-    //   outputBuffer = List.filled(
-    //     1 * _outputSize,
-    //     0.0,
-    //   ).reshape([1, _outputSize]);
-    // } else {
-    //   // Trường hợp output cũng bị quantized (hiếm gặp với Embedding nhưng có thể)
-    //   // Ta hứng tạm bằng int, sau đó sẽ convert ra float
-    //   outputBuffer = List.filled(1 * _outputSize, 0).reshape([1, _outputSize]);
-    // }
-
-    try {
-      // 1. Convert BGR -> RGB (BẮT BUỘC)
-      // OpenCV mặc định là BGR, Model AI cần RGB
-      cv.Mat rgbMat = cv.cvtColor(alignedMat, cv.COLOR_BGR2RGB);
-
-      // 2. Resize ảnh nếu kích thước ảnh đầu vào khác với kích thước model yêu cầu
-      // (Phòng trường hợp ảnh crop ra là 112x112 nhưng model lại cần 128x128)
-      if (rgbMat.rows != _inputSize || rgbMat.cols != _inputSize) {
-        // debugPrint("⚠️ Resize ảnh từ ${rgbMat.rows} -> $_inputSize");
-        cv.Mat resizedMat = cv.resize(rgbMat, (
-          _inputSize,
-          _inputSize,
-        ), interpolation: cv.INTER_LINEAR);
-        rgbMat.dispose(); // Giải phóng ảnh cũ
-        rgbMat = resizedMat; // Gán ảnh mới
-      }
-
-      // 2. Convert sang Float32 & Normalize
-      cv.Mat floatMat = rgbMat.convertTo(
-        cv.MatType.CV_32FC3,
-        alpha: normAlpha, // 1/128
-        beta: normBeta, // -127.5/128
-      );
-
-      // 3. Lấy dữ liệu RAW HWC (Height-Width-Channel)
-      // Tức là: [R1, G1, B1, R2, G2, B2, ...]
-      // Đây là định dạng native của ảnh và TFLite thích cái này.
-      final byteData = floatMat.data;
-
-      // Sử dụng offsetInBytes để AN TOÀN BỘ NHỚ (Tránh crash SIGSEGV)
-      final inputFloatList = Float32List.view(
-        byteData.buffer,
-        byteData.offsetInBytes,
-        byteData.lengthInBytes ~/ 4,
-      );
-
-      // 4. Đưa vào Model
-      var inputBuffer = Float32List.fromList(inputFloatList).reshape([
-        1,
-        _inputSize,
-        _inputSize,
-        3, // Số kênh màu (RGB) thường luôn là 3
-      ]);
-
-      var outputBuffer = List.filled(
-        _outputSize,
-        0.0,
-      ).reshape([1, _outputSize]);
-
-      // 5. Run Inference
-      _interpreter!.run(inputBuffer, outputBuffer);
-
-      // // 6. Xử lý kết quả (Dequantize Output nếu cần)
-      // List<double> rawEmbedding = [];
-      // var rawOutput = outputBuffer[0]; // Lấy batch đầu tiên
-
-      // if (outputTensor.type == TensorType.float32) {
-      //   rawEmbedding = List<double>.from(rawOutput);
-      // } else {
-      //   // Nếu Output là Int8, ta cần đổi ngược lại ra Float để tính toán khoảng cách
-      //   // Công thức: f = (q - zero_point) * scale
-      //   double outScale = outputTensor.params.scale;
-      //   int outZeroPoint = outputTensor.params.zeroPoint;
-      //   for (var val in rawOutput) {
-      //     rawEmbedding.add((val - outZeroPoint) * outScale);
-      //   }
-      // }
-
-      // Dọn dẹp
-      rgbMat.dispose();
-      floatMat.dispose();
-
-      // 6. Lấy kết quả & L2 Normalize
-      List<double> rawEmbedding = List<double>.from(outputBuffer[0]);
-      return _l2Normalize(rawEmbedding);
-    } catch (e) {
-      debugPrint("❌ Error generating embedding: $e");
-      return [];
-    }
-  }
-
-  List<double> _l2Normalize(List<double> embedding) {
-    double squareSum = 0;
-    for (var x in embedding) {
-      squareSum += x * x;
-    }
-    double xInvNorm = math.sqrt(math.max(squareSum, 1e-10));
-    return embedding.map((x) => x / xInvNorm).toList();
-  }
-
-  void dispose() {
-    _interpreter?.close();
-  }
-}
+import '../app/services/face_aligner_cv.dart';
+import 'model_service.dart';
 
 class FaceSeeder extends StatefulWidget {
   const FaceSeeder({super.key});
@@ -433,7 +157,9 @@ class _FaceSeederState extends State<FaceSeeder> {
       Map<String, dynamic> reportData = {
         "model_info": {
           "name": modelName,
-          "input_size": _aiService.inputSize,
+          "input_height": ToolAIService.inputHeight,
+          "input_width": ToolAIService.inputWidth,
+          "channels": ToolAIService.channels,
           "output_dim": _aiService.outputSize,
           "file_size_mb": double.parse(modelSizeMB.toStringAsFixed(2)),
           // Nếu dùng code fix trước đó thì lấy _aiService._inputType
@@ -756,17 +482,22 @@ class _FaceSeederState extends State<FaceSeeder> {
     String filename = "face_db.json",
   }) async {
     debugPrint("📡 Đang gửi dữ liệu về máy tính...");
+
+    // Khởi tạo Dio
+    final dio = Dio();
     try {
       // SỬA IP TẠI ĐÂY (Dùng ipconfig trên PC để xem)
-      String serverUrl = "http://192.168.0.186:5000/upload-json";
+      String serverUrl = "http://192.168.1.106:5000/upload-json";
 
-      var response = await http.post(
-        Uri.parse(serverUrl),
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode({
-          "filename": filename, // Gửi tên file lên server
-          "content": jsonString,
-        }),
+      var response = await dio.post(
+        serverUrl,
+        // Dio tự động chuyển Map này thành JSON
+        data: {"filename": filename, "content": jsonString},
+        // Cấu hình Header
+        options: Options(
+          headers: {"Content-Type": "application/json"},
+          sendTimeout: const Duration(seconds: 10), // Timeout sau 10s
+        ),
       );
 
       if (response.statusCode == 200) {
