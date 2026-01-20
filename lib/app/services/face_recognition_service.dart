@@ -48,7 +48,7 @@ class FaceRecognitionService {
   Future<void> initialize() async {
     try {
       debugPrint("🚀 Bắt đầu khởi tạo FaceRecognitionService...");
-  
+
       // Khởi tạo Database (Hive)
       await Hive.initFlutter();
       _hiveBox = await Hive.openBox('face_db');

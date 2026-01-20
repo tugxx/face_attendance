@@ -237,4 +237,68 @@ extern "C" {
         // 5. Giải phóng bộ nhớ ảnh gốc
         stbi_image_free(imgData);
     }
+    
+
+    // --------------------------------------------------------
+    // HÀM XỬ LÝ ANTI-SPOOFING (Scale 2.7 -> Crop 80x80)
+    // --------------------------------------------------------
+    void process_antispoof_crop(
+        uint8_t* yuvBytes,
+        int width, int height,
+        int x, int y, int w, int h, // Bbox khuôn mặt
+        int rotation,
+        float* outputBuffer // Output 80x80x3
+    ) {
+        // 1. Logic tính toán Box mới (Port từ Python CropImage._get_new_box)
+        float scale = 2.7f;
+        
+        // Tính scale logic giống Python
+        // scale = min((src_h-1)/box_h, min((src_w-1)/box_w, scale))
+        // Ở đây ta dùng kích thước logic sau khi xoay (nếu cần), 
+        // nhưng để đơn giản ta tính trên hệ toạ độ gốc của bbox
+        
+        float new_width = w * scale;
+        float new_height = h * scale;
+        
+        float center_x = x + w / 2.0f;
+        float center_y = y + h / 2.0f;
+
+        int left = (int)(center_x - new_width / 2.0f);
+        int top = (int)(center_y - new_height / 2.0f);
+        
+        // 2. Loop 80x80 (Kích thước input MiniFASNet)
+        int targetSize = 80;
+        int pIdx = 0;
+        
+        // Tỷ lệ step để lấy mẫu từ ảnh to về 80x80
+        float stepX = new_width / (float)targetSize;
+        float stepY = new_height / (float)targetSize;
+
+        for (int row = 0; row < targetSize; row++) {
+            for (int col = 0; col < targetSize; col++) {
+                
+                // Tính toạ độ cần lấy trên ảnh gốc
+                float srcX = left + col * stepX;
+                float srcY = top + row * stepY;
+
+                // Hàm get_pixel_from_yuv (đã viết ở bài trước) cực kỳ hữu dụng ở đây!
+                // Nó tự lo việc check biên (padding) và xoay ảnh (rotation)
+                int rgb = get_pixel_from_yuv(yuvBytes, width, height, srcX, srcY, rotation);
+
+                int r = (rgb >> 16) & 0xFF;
+                int g = (rgb >> 8) & 0xFF;
+                int b = rgb & 0xFF;
+
+                // Python: img.astype(np.float32) (Thường là 0-255 hoặc chuẩn hóa tùy lúc train)
+                // MiniFASNet gốc thường không normalize về -1..1 mà để 0..255 hoặc 0..1
+                // Ở đây tôi để 0..1 (float), nếu model chạy sai thì sửa thành r/1.0f (giữ nguyên 0-255)
+                
+                // LƯU Ý: TFLite cần input shape [1, 80, 80, 3] (NHWC)
+                // Nên ta ghi R, G, B tuần tự
+                outputBuffer[pIdx++] = (float)r; // Giả sử model cần 0-255
+                outputBuffer[pIdx++] = (float)g;
+                outputBuffer[pIdx++] = (float)b;
+            }
+        }
+    }
 }

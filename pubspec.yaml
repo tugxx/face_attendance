@@ -69,6 +69,7 @@ flutter:
   # Thêm đoạn này vào (Chú ý thụt đầu dòng thẳng hàng với uses-material-design)
   assets:
     - assets/models/mobilefacenet.tflite
+    - assets/models/fasnet_float32.tflite
     # - assets/models/MobileFaceNet_testing_2.tflite
     # - assets/models/w600k_mbf_float32.tflite
     # - assets/models/output_model_test.tflite

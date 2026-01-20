@@ -3,14 +3,13 @@ import 'dart:io';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
-import 'package:flutter/foundation.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:flutter/services.dart';
 
 import '../../app/utils/camera_utils.dart';
 import '../../app/services/face_recognition_service.dart';
-import '../../app/types/face_progress.dart';
+import '../../app/services/face_isolate_service.dart';
+import '../../app/services/face_antispoofing_service.dart';
 
 class FaceCheckinState {
   // Biến cấu hình
@@ -37,6 +36,8 @@ final checkinState = FaceCheckinState();
 class FaceAttendanceController extends GetxController {
   CameraController? cameraController;
   final FaceRecognitionService _aiService = FaceRecognitionService();
+  final FaceIsolateService _isolateService = FaceIsolateService();
+  final _spoofService = FaceAntiSpoofingService();
 
   var isInitialized = false.obs; // Cờ báo hiệu Camera đã bật chưa.
   var recognizedName = "Unknown".obs;
@@ -117,15 +118,9 @@ class FaceAttendanceController extends GetxController {
   //   return null;
   // }
 
-  Future<bool> _predictAntiSpoofing(List<double> facePixels) async {
-    // TODO: Gọi model Anti-Spoofing của bạn ở đây
-    // Return true nếu là người thật, false nếu là giả mạo
-    await Future.delayed(const Duration(milliseconds: 10));
-    return true;
-  }
-
   Future<void> _performRecognition(
-    List<double> facePixels,
+    List<double> recogPixels, // 112x112
+    List<double> spoofPixels, // 80x80
     Stopwatch sw,
   ) async {
     if (checkinState.isSuccessCooldown) {
@@ -133,7 +128,7 @@ class FaceAttendanceController extends GetxController {
       return;
     }
 
-    if (facePixels.isEmpty) {
+    if (recogPixels.isEmpty) {
       debugPrint("⚠️ Lỗi: Dữ liệu khuôn mặt rỗng!");
       isProcessing.value = false;
       return;
@@ -150,10 +145,10 @@ class FaceAttendanceController extends GetxController {
       // ---------------------------------------------------------
 
       // Gọi nhận diện danh tính
-      final futureIdentity = _aiService.predict(facePixels);
+      final futureIdentity = _aiService.predict(recogPixels);
 
       // Gọi Liveness (Anti-Spoofing) luôn, không cần chờ ID
-      final futureLiveness = _predictAntiSpoofing(facePixels);
+      final futureLiveness = Future(() => _spoofService.predict(spoofPixels));
 
       // Chờ cả 2 kết quả trả về
       final results = await Future.wait([futureIdentity, futureLiveness]);
@@ -176,6 +171,9 @@ class FaceAttendanceController extends GetxController {
       // ---------------------------------------------------------
 
       if (detectedName != "Unknown" && isRealPerson) {
+        // ✅ QUAN TRỌNG: Xóa lỗi cũ ngay khi nhận diện thành công
+        if (errorMsg.value.isNotEmpty) errorMsg.value = "";
+
         // Nếu là người mới hoặc đang track dở người này
         if (detectedName == checkinState.currentCandidate) {
           checkinState.matchStreak++; // Tăng điểm tin cậy
@@ -198,11 +196,20 @@ class FaceAttendanceController extends GetxController {
           await _handleCheckinSuccess(checkinState.currentCandidate!);
         }
       } else {
-        // ❌ FAILED (Hoặc là Unknown, hoặc là Fake)
-        if (!isRealPerson && detectedName != "Unknown") {
+        // A. NẾU LÀ GIẢ MẠO (Spoof)
+        if (!isRealPerson) {
           debugPrint("⚠️ SPOOF DETECTED for $detectedName");
-          // Có thể show cảnh báo nhỏ ở đây nếu cần thiết, nhưng đừng dùng Snackbar chặn màn hình
+          errorMsg.value = "⚠️ Cảnh báo: Phát hiện giả mạo!";
+          return; // Dừng xử lý frame này
         }
+
+        // B. NẾU LÀ NGƯỜI THẬT NHƯNG KHÔNG NHẬN RA (Unknown)
+        // Hoặc frame này bình thường trở lại -> Xóa lỗi "Giả mạo" đi
+        if (errorMsg.value.contains("giả mạo")) {
+          errorMsg.value = ""; // ✅ Reset về trạng thái bình thường
+        }
+
+        errorMsg.value = "";
 
         // Reset streak nếu đứt quãng
         checkinState.matchStreak = 0;
@@ -258,6 +265,11 @@ class FaceAttendanceController extends GetxController {
   @override
   void onInit() async {
     super.onInit();
+
+    // Khởi động Worker (Chỉ 1 lần duy nhất)
+    await _isolateService.start();
+
+    await _spoofService.initialize();
 
     try {
       // Bắt đầu quy trình khởi tạo
@@ -354,18 +366,17 @@ class FaceAttendanceController extends GetxController {
     final Stopwatch sw = Stopwatch()..start();
 
     Face? face;
-    
+
     try {
       // 1. Detect khuôn mặt (ML Kit - Giữ nguyên)
       face = await _detectFaceFromImage(image);
-      
     } catch (e) {
       debugPrint("Error detecting: $e");
     } finally {
       _isDetecting = false; // Luôn mở khóa detect
     }
 
-    int tDetect = sw.elapsedMilliseconds;
+    // int tDetect = sw.elapsedMilliseconds;
 
     // Nếu không có mặt -> Dừng
     if (face == null) {
@@ -376,8 +387,8 @@ class FaceAttendanceController extends GetxController {
       return;
     }
 
-    // Log Detect (Nên < 80ms)
-    debugPrint("1️⃣ Detect: ${tDetect}ms");
+    // // Log Detect (Nên < 80ms)
+    // debugPrint("1️⃣ Detect: ${tDetect}ms");
 
     // 2. Throttling (Giữ nguyên)
     if (_shouldSkipRecognition()) return;
@@ -390,46 +401,51 @@ class FaceAttendanceController extends GetxController {
       // Copy YUV bytes (Phải copy vì CameraImage buffer sẽ bị hủy ở frame sau)
       final rawBytes = CameraUtils.cloneCameraBytes(image);
 
-      // Tạo Request (Lưu ý: Bỏ các tham số cropW, cropH vì Dart Processor tự tính)
-      final request = FaceProcessRequest(
-        yuvBytes: rawBytes,
-        width: image.width,
-        height: image.height,
-        face: face,
-        sensorOrientation: _currentCamera!.sensorOrientation,
-        isAndroid: Platform.isAndroid,
-        rootToken: RootIsolateToken.instance,
-      );
-
-      // 5. Gửi sang Isolate -> Gọi C++ Native
-      // Đo thời gian bắt đầu gửi
-      int tStartCrop = sw.elapsedMilliseconds;
+      // // 5. Gửi sang Isolate -> Gọi C++ Native
+      // // Đo thời gian bắt đầu gửi
+      // int tStartCrop = sw.elapsedMilliseconds;
 
       // 5. Gửi sang Isolate (Xử lý ảnh bằng Dart thuần)
       // Input: YUV -> Output: List<double> (Pixels đã chuẩn hóa)
       debugPrint("🚀 Gửi task sang Isolate...");
 
-      final List<double>? facePixels = await compute(
-        isolateFaceProcessor,
-        request,
+      final futureRecogCrop = _isolateService.processInIsolate(
+        rawBytes,
+        image.width,
+        image.height,
+        face, // Hàm này sẽ tự extract landmarks ra list số thực
+        _currentCamera!.sensorOrientation,
       );
 
-      int tEndCrop = sw.elapsedMilliseconds;
-      int tCrop = tEndCrop - tStartCrop; // Thời gian thực tế của bước Crop
+      final futureSpoofCrop = _isolateService.processAntiSpoofInIsolate(
+        rawBytes,
+        image.width,
+        image.height,
+        face,
+        _currentCamera!.sensorOrientation,
+      );
+
+      final crops = await Future.wait([futureRecogCrop, futureSpoofCrop]);
+
+      final List<double>? recogPixels = crops[0];
+      final List<double>? spoofPixels = crops[1];
+
+      // int tEndCrop = sw.elapsedMilliseconds;
+      // int tCrop = tEndCrop - tStartCrop; // Thời gian thực tế của bước Crop
 
       // 6. Có kết quả từ Isolate -> Đưa vào Model
-      if (facePixels != null) {
-        await _performRecognition(facePixels, sw);
+      if (recogPixels != null && spoofPixels != null) {
+        await _performRecognition(recogPixels, spoofPixels, sw);
 
-        int tTotal = sw.elapsedMilliseconds;
+        // int tTotal = sw.elapsedMilliseconds;
 
-        debugPrint(
-          "⏱️ [${tTotal}ms] "
-          "Detect: ${tDetect}ms | "
-          "Crop: ${tCrop}ms | "
-          "AI: ${tTotal - tEndCrop}ms | "
-          "FPS: ${(1000 / tTotal).toStringAsFixed(1)}",
-        );
+        // debugPrint(
+        //   "⏱️ [${tTotal}ms] "
+        //   "Detect: ${tDetect}ms | "
+        //   "Crop: ${tCrop}ms | "
+        //   "AI: ${tTotal - tEndCrop}ms | "
+        //   "FPS: ${(1000 / tTotal).toStringAsFixed(1)}",
+        // );
       } else {
         debugPrint("⚠️ Isolate trả về null (Do mặt nghiêng hoặc lỗi ảnh)");
         isProcessing.value = false;
@@ -451,6 +467,7 @@ class FaceAttendanceController extends GetxController {
     _faceDetector.close();
     cameraController?.stopImageStream();
     cameraController?.dispose();
+    _isolateService.dispose();
     super.onClose();
   }
 }
