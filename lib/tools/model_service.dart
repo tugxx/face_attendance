@@ -26,7 +26,7 @@ class ToolAIService {
 
   int get outputSize => _outputSize;
 
-  static const String modelPath = 'assets/models/w600k_mbf_float32.tflite';
+  static const String modelPath = 'assets/models/mobilefacenet.tflite';
 
   Future<void> initialize() async {
     try {

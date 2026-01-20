@@ -25,74 +25,11 @@ class FaceProcessRequest {
   });
 }
 
-// class FaceProcessorDart {
-//   /// Hàm chính xử lý tất cả: YUV -> RGB -> Rotate -> Align -> Normalize
-//   /// Trả về: List double sẵn sàng đưa vào Model
-//   static Future<List<double>?> process(FaceProcessRequest request) async {
-//     try {
-//       // 1. Convert YUV (NV21) sang Image (RGB)
-//       img.Image? image = convertNV21ToImage(
-//         request.yuvBytes,
-//         request.width,
-//         request.height,
-//       );
+// ==========================================================
+// 1. ĐỊNH NGHĨA CÁC HÀM C++ (FFI TYPES)
+// ==========================================================
 
-//       // 2. Xoay ảnh theo Sensor (để mặt đứng thẳng)
-//       // Android thường bị xoay 90 hoặc 270 độ
-//       if (request.isAndroid && request.sensorOrientation != 0) {
-//         image = img.copyRotate(image, angle: request.sensorOrientation);
-//       }
-
-//       // 3. GỌI FACE ALIGNER
-//       return FaceAligner.alignFace(
-//         image,
-//         request.face,
-//         targetSize: 112,
-//         // saveDebug: true, // Có thể bật debug trong này nếu muốn check từng frame
-//         // debugName: "live_frame"
-//       );
-//     } catch (e) {
-//       debugPrint("❌ Error processing face: $e");
-//       return null;
-//     }
-//   }
-
-//   /// CHUYỂN ĐỔI NV21 (YUV) SANG RGB
-//   static img.Image convertNV21ToImage(Uint8List yuv, int width, int height) {
-//     final img.Image image = img.Image(width: width, height: height);
-//     final int frameSize = width * height;
-
-//     // Duyệt từng pixel
-//     for (int y = 0; y < height; y++) {
-//       for (int x = 0; x < width; x++) {
-//         int yIndex = y * width + x;
-
-//         // NV21 cấu trúc: Y plane full, sau đó là VU xen kẽ
-//         int uvIndex = frameSize + (y >> 1) * width + (x & ~1);
-
-//         int Y = yuv[yIndex] & 0xff;
-//         int V = yuv[uvIndex] & 0xff; // NV21 thì V nằm trước
-//         int U = yuv[uvIndex + 1] & 0xff; // Sau đó là U
-
-//         // Công thức YUV -> RGB
-//         int r = (Y + 1.402 * (V - 128)).toInt();
-//         int g = (Y - 0.344136 * (U - 128) - 0.714136 * (V - 128)).toInt();
-//         int b = (Y + 1.772 * (U - 128)).toInt();
-
-//         // Clamp về [0, 255]
-//         r = r.clamp(0, 255);
-//         g = g.clamp(0, 255);
-//         b = b.clamp(0, 255);
-
-//         // Set pixel vào Image
-//         image.setPixelRgb(x, y, r, g, b);
-//       }
-//     }
-//     return image;
-//   }
-// }
-
-// Định nghĩa hàm C++
+// A. Cho Camera (Nhận YUV Bytes)
 typedef ProcessFaceAffineFunc =
     Void Function(
       Pointer<Uint8> yuvBytes,
@@ -114,9 +51,30 @@ typedef ProcessFaceAffineDart =
       Pointer<Float> output,
     );
 
+// B. Cho File Ảnh (Nhận File Path String)
+typedef ProcessFileRawFunc =
+    Void Function(
+      Pointer<Utf8> filePath,
+      Pointer<Float> landmarks,
+      Pointer<Float> output,
+    );
+
+typedef ProcessFileRawDart =
+    void Function(
+      Pointer<Utf8> filePath,
+      Pointer<Float> landmarks,
+      Pointer<Float> output,
+    );
+
+// ==========================================================
+// 2. CLASS GIAO TIẾP VỚI NATIVE
+// ==========================================================
+
 class FaceProcessorNative {
   static DynamicLibrary? _lib;
-  static ProcessFaceAffineDart? _func;
+
+  static ProcessFaceAffineDart? _funcCamera;
+  static ProcessFileRawDart? _funcFile;
 
   static void init() {
     if (_lib != null) return;
@@ -127,13 +85,73 @@ class FaceProcessorNative {
     try {
       _lib = DynamicLibrary.open(libName);
 
-      _func = _lib!
-          .lookup<NativeFunction<ProcessFaceAffineFunc>>('process_face_affine')
-          .asFunction();
+      // Load hàm Camera
+      try {
+        _funcCamera = _lib!
+            .lookup<NativeFunction<ProcessFaceAffineFunc>>(
+              'process_face_affine',
+            )
+            .asFunction();
+      } catch (_) {
+        debugPrint("⚠️ Missing process_face_affine");
+      }
+
+      // Load hàm File (Mới)
+      try {
+        _funcFile = _lib!
+            .lookup<NativeFunction<ProcessFileRawFunc>>(
+              'process_file_affine_raw',
+            )
+            .asFunction();
+      } catch (_) {
+        debugPrint("⚠️ Missing process_file_affine_raw");
+      }
+
       debugPrint("✅ Đã load thư viện C++ thành công: $libName");
     } catch (e) {
       debugPrint("❌ Lỗi load thư viện C++: $e");
     }
+  }
+
+  // --------------------------------------------------------
+  // HELPER: Convert Landmarks từ ML Kit -> Mảng Float C++
+  // --------------------------------------------------------
+  static Pointer<Float>? _convertLandmarks(Face face) {
+    final lm = face.landmarks;
+    final leftEye = lm[FaceLandmarkType.leftEye]?.position;
+    final rightEye = lm[FaceLandmarkType.rightEye]?.position;
+
+    // Yêu cầu tối thiểu phải có 2 mắt để tính góc xoay
+    if (leftEye == null || rightEye == null) return null;
+
+    final ptr = calloc<Float>(10);
+    final list = ptr.asTypedList(10);
+
+    list[0] = leftEye.x.toDouble();
+    list[1] = leftEye.y.toDouble();
+    list[2] = rightEye.x.toDouble();
+    list[3] = rightEye.y.toDouble();
+
+    // Các điểm phụ (nếu có)
+    final nose = lm[FaceLandmarkType.noseBase]?.position;
+    if (nose != null) {
+      list[4] = nose.x.toDouble();
+      list[5] = nose.y.toDouble();
+    }
+
+    final lMouth = lm[FaceLandmarkType.leftMouth]?.position;
+    if (lMouth != null) {
+      list[6] = lMouth.x.toDouble();
+      list[7] = lMouth.y.toDouble();
+    }
+
+    final rMouth = lm[FaceLandmarkType.rightMouth]?.position;
+    if (rMouth != null) {
+      list[8] = rMouth.x.toDouble();
+      list[9] = rMouth.y.toDouble();
+    }
+
+    return ptr;
   }
 
   static List<double>? process(
@@ -143,44 +161,11 @@ class FaceProcessorNative {
     Face face,
     int rotation,
   ) {
-    if (_func == null) init();
-    if (_func == null) return null;
+    if (_funcCamera == null) init();
+    if (_funcCamera == null) return null;
 
-    // 1. Trích xuất Landmarks (5 điểm)
-    // Map từ ML Kit Face -> Flat Array
-    final lm = face.landmarks;
-    final leftEye = lm[FaceLandmarkType.leftEye]?.position;
-    final rightEye = lm[FaceLandmarkType.rightEye]?.position;
-    final nose = lm[FaceLandmarkType.noseBase]?.position;
-    final leftMouth = lm[FaceLandmarkType.leftMouth]?.position;
-    final rightMouth = lm[FaceLandmarkType.rightMouth]?.position;
-
-    // Nếu thiếu điểm quan trọng -> Return null
-    if (leftEye == null || rightEye == null) return null;
-
-    // Tạo mảng Landmarks cho C++ (10 số float)
-    final Pointer<Float> ptrLandmarks = calloc<Float>(10);
-    final listLm = ptrLandmarks.asTypedList(10);
-
-    // Gán dữ liệu (X, Y)
-    listLm[0] = leftEye.x.toDouble();
-    listLm[1] = leftEye.y.toDouble();
-    listLm[2] = rightEye.x.toDouble();
-    listLm[3] = rightEye.y.toDouble();
-    // Các điểm còn lại nếu C++ cần dùng (hiện tại code C++ trên chỉ dùng 2 mắt)
-    // Nhưng cứ truyền đủ cho đúng cấu trúc
-    if (nose != null) {
-      listLm[4] = nose.x.toDouble();
-      listLm[5] = nose.y.toDouble();
-    }
-    if (leftMouth != null) {
-      listLm[6] = leftMouth.x.toDouble();
-      listLm[7] = leftMouth.y.toDouble();
-    }
-    if (rightMouth != null) {
-      listLm[8] = rightMouth.x.toDouble();
-      listLm[9] = rightMouth.y.toDouble();
-    }
+    final ptrLandmarks = _convertLandmarks(face);
+    if (ptrLandmarks == null) return null;
 
     // 2. Cấp phát bộ nhớ cho YUV (Copy dữ liệu ảnh sang C++)
     final Pointer<Uint8> ptrYuv = calloc<Uint8>(yuvBytes.length);
@@ -192,7 +177,7 @@ class FaceProcessorNative {
 
     try {
       // 4. 🔥 GỌI C++
-      _func!(ptrYuv, width, height, ptrLandmarks, rotation, ptrOut);
+      _funcCamera!(ptrYuv, width, height, ptrLandmarks, rotation, ptrOut);
 
       // 5. Lấy kết quả
       final Float32List result = ptrOut.asTypedList(outLen);
@@ -202,6 +187,35 @@ class FaceProcessorNative {
       return null;
     } finally {
       calloc.free(ptrYuv);
+      calloc.free(ptrLandmarks);
+      calloc.free(ptrOut);
+    }
+  }
+
+  static List<double>? processFile(String filePath, Face face) {
+    if (_funcFile == null) init();
+    if (_funcFile == null) return null;
+
+    final ptrLandmarks = _convertLandmarks(face);
+    if (ptrLandmarks == null) return null;
+
+    // Convert String Path -> C String (Utf8)
+    final Pointer<Utf8> ptrPath = filePath.toNativeUtf8();
+
+    final int outLen = 112 * 112 * 3;
+    final Pointer<Float> ptrOut = calloc<Float>(outLen);
+
+    try {
+      // 🔥 GỌI C++ (STB_IMAGE)
+      _funcFile!(ptrPath, ptrLandmarks, ptrOut);
+
+      final Float32List result = ptrOut.asTypedList(outLen);
+      return List<double>.from(result);
+    } catch (e) {
+      debugPrint("Native File Error: $e");
+      return null;
+    } finally {
+      calloc.free(ptrPath); // Nhớ free string
       calloc.free(ptrLandmarks);
       calloc.free(ptrOut);
     }

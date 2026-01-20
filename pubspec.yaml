@@ -35,14 +35,14 @@ dependencies:
   camera: ^0.11.3
   image: ^4.5.4
   path: ^1.9.1
-  # dio: ^5.9.0
+  dio: ^5.9.0 #
   ffi: ^2.1.0
   path_provider: ^2.1.5
   permission_handler: ^12.0.1
   google_mlkit_face_detection: ^0.13.1
   tflite_flutter: ^0.11.0
   hive_flutter: ^1.1.0
-  # archive: ^4.0.7
+  archive: ^4.0.7 #
   flutter_image_compress: ^2.3.0
 
 dev_dependencies:
@@ -72,7 +72,7 @@ flutter:
     # - assets/models/MobileFaceNet_testing_2.tflite
     # - assets/models/w600k_mbf_float32.tflite
     # - assets/models/output_model_test.tflite
-    # - assets/dataset.zip
+    - assets/dataset.zip
     - assets/db_mobilefacenet_tflite.json
     # - assets/db_MobileFaceNet_testing_2_tflite.json
     # - assets/db_w600k_mbf_float32_tflite.json

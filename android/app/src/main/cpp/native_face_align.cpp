@@ -4,6 +4,8 @@
 #include <algorithm>
 
 #define PI 3.14159265358979323846
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
 
 // 5 Điểm chuẩn (Reference Points) cho ảnh 112x112
 // [Mắt trái, Mắt phải, Mũi, Miệng trái, Miệng phải]
@@ -142,5 +144,97 @@ extern "C" {
                 outputBuffer[pIdx++] = (b - 127.5f) / 128.0f;
             }
         }
+    }
+
+    // ----------------------------------------------------------------------
+    // HÀM MỚI: XỬ LÝ FILE ẢNH (KHÔNG DÙNG OPENCV)
+    // ----------------------------------------------------------------------
+    void process_file_affine_raw(
+        char* filePath,       
+        float* landmarks,     
+        float* outputBuffer   
+    ) {
+        // 1. Đọc file ảnh bằng stb_image (Siêu nhẹ)
+        int width, height, channels;
+        // Force load thành 3 kênh màu (RGB) bất kể ảnh gốc là gì
+        unsigned char* imgData = stbi_load(filePath, &width, &height, &channels, 3);
+        
+        if (imgData == NULL) {
+            __android_log_print(ANDROID_LOG_ERROR, "NativeFace", "Cannot load image: %s", filePath);
+            return;
+        }
+
+        // 2. TÍNH TOÁN MA TRẬN AFFINE (Code Toán thuần - Giống Dart)
+        // Tâm mắt trái/phải từ Landmarks
+        float src_eye_x = (landmarks[0] + landmarks[2]) / 2.0f;
+        float src_eye_y = (landmarks[1] + landmarks[3]) / 2.0f;
+        
+        float dx = landmarks[2] - landmarks[0];
+        float dy = landmarks[3] - landmarks[1];
+        float src_dist = sqrt(dx*dx + dy*dy);
+        float src_angle = atan2(dy, dx);
+
+        // Tâm mắt chuẩn (Ref Points)
+        float dst_eye_x = (REF_X[0] + REF_X[1]) / 2.0f;
+        float dst_eye_y = (REF_Y[0] + REF_Y[1]) / 2.0f;
+        float d_dx = REF_X[1] - REF_X[0];
+        float d_dy = REF_Y[1] - REF_Y[0];
+        float dst_dist = sqrt(d_dx*d_dx + d_dy*d_dy);
+        float dst_angle = atan2(d_dy, d_dx);
+
+        float scale = dst_dist / src_dist;
+        float angle_diff = dst_angle - src_angle;
+        float cosR = cos(angle_diff) * scale;
+        float sinR = sin(angle_diff) * scale;
+
+        float tx = dst_eye_x - (src_eye_x * cosR - src_eye_y * sinR);
+        float ty = dst_eye_y - (src_eye_x * sinR + src_eye_y * cosR);
+
+        // 3. TÍNH MA TRẬN NGHỊCH ĐẢO (INVERSE MAPPING)
+        float det = cosR * cosR - (-sinR) * sinR;
+        float idet = 1.0f / det;
+        
+        float A = cosR * idet;
+        float B = sinR * idet;
+        float C = (-sinR * ty - cosR * tx) * idet;
+        float D = -sinR * idet;
+        float E = cosR * idet;
+        float F = (sinR * tx - cosR * ty) * idet;
+
+        // 4. VÒNG LẶP WARP & NORMALIZE
+        int targetSize = 112;
+        int pIdx = 0;
+        int stride = width * 3; // Mỗi pixel 3 byte RGB
+
+        for (int y = 0; y < targetSize; y++) {
+            for (int x = 0; x < targetSize; x++) {
+                
+                // Map ngược từ (x,y) đích -> (srcX, srcY) nguồn
+                float srcX = x * A + y * B + C;
+                float srcY = x * D + y * E + F;
+
+                int realX = (int)srcX;
+                int realY = (int)srcY;
+
+                // Check biên
+                if (realX < 0) realX = 0; if (realX >= width) realX = width - 1;
+                if (realY < 0) realY = 0; if (realY >= height) realY = height - 1;
+
+                // Lấy pixel từ mảng byte thô (Raw Pointer Arithmetic)
+                int idx = realY * stride + realX * 3;
+                
+                unsigned char r_val = imgData[idx];
+                unsigned char g_val = imgData[idx + 1];
+                unsigned char b_val = imgData[idx + 2];
+
+                // Normalize (-1.0 -> 1.0)
+                outputBuffer[pIdx++] = (r_val - 127.5f) / 128.0f;
+                outputBuffer[pIdx++] = (g_val - 127.5f) / 128.0f;
+                outputBuffer[pIdx++] = (b_val - 127.5f) / 128.0f;
+            }
+        }
+
+        // 5. Giải phóng bộ nhớ ảnh gốc
+        stbi_image_free(imgData);
     }
 }
