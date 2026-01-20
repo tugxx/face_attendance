@@ -32,7 +32,7 @@ android {
 
     buildTypes {
         release {
-            // ✅ FIX LỖI CÚ PHÁP Ở ĐÂY (Kotlin dùng dấu = và ngoặc đơn)
+            // Bật 2 dòng này để Obfuscate và xóa resource thừa
             isMinifyEnabled = true 
             isShrinkResources = true
             
@@ -52,8 +52,25 @@ android {
         noCompress += "tflite"
         noCompress += "lite"
     }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+        }
+    }
 }
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    // Thêm thư viện ML Kit bản "Unbundled" (Tải từ Google Play Services) 
+    implementation("com.google.android.gms:play-services-mlkit-face-detection:17.1.0")
+}
+
+// CẤU HÌNH LOẠI BỎ BẢN CŨ (BUNDLED)
+// ép Gradle không được tải gói face-detection về
+configurations.all {
+    exclude(group = "com.google.mlkit", module = "face-detection")
 }

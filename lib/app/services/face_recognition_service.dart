@@ -1,11 +1,11 @@
 import 'dart:math';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:flutter/services.dart';
-import 'package:opencv_dart/opencv_dart.dart' as cv;
 
 class RecognitionResult {
   final String name;
@@ -38,6 +38,7 @@ class FaceRecognitionService {
 
   int _inputWidth = 112;
   int _inputHeight = 112;
+  int _channels = 3;
   int _outputSize = 192;
 
   bool get isDatabaseEmpty => _faceDatabase.isEmpty;
@@ -47,7 +48,7 @@ class FaceRecognitionService {
   Future<void> initialize() async {
     try {
       debugPrint("🚀 Bắt đầu khởi tạo FaceRecognitionService...");
-
+  
       // Khởi tạo Database (Hive)
       await Hive.initFlutter();
       _hiveBox = await Hive.openBox('face_db');
@@ -70,6 +71,14 @@ class FaceRecognitionService {
   Future<void> _loadModel() async {
     try {
       final options = InterpreterOptions();
+
+      // 🚀 QUAN TRỌNG: BẬT GPU
+      if (Platform.isAndroid) {
+        options.addDelegate(GpuDelegateV2()); // Android dùng GPU/NNAPI
+      } else if (Platform.isIOS) {
+        options.addDelegate(GpuDelegate()); // iOS dùng Metal
+      }
+
       _interpreter = await Interpreter.fromAsset(_modelPath, options: options);
 
       var inputTensor = _interpreter!.getInputTensor(0);
@@ -77,6 +86,7 @@ class FaceRecognitionService {
 
       _inputHeight = inputShape[1];
       _inputWidth = inputShape[2];
+      _channels = inputShape[3];
 
       _interpreter!.resizeInputTensor(0, [1, _inputHeight, _inputWidth, 3]);
       _interpreter!.allocateTensors();
@@ -100,32 +110,32 @@ class FaceRecognitionService {
   Future<void> _syncDatabase() async {
     _faceDatabase.clear();
 
-    // // TRƯỜNG HỢP 1: Đã có dữ liệu trong Hive (Từ lần chạy thứ 2 trở đi)
-    // if (_hiveBox.isNotEmpty) {
-    //   debugPrint("📂 Đang sử dụng dữ liệu từ Hive (Disk)...");
-    //   int conflictCount = 0;
+    // TRƯỜNG HỢP 1: Đã có dữ liệu trong Hive (Từ lần chạy thứ 2 trở đi)
+    if (_hiveBox.isNotEmpty) {
+      debugPrint("📂 Đang sử dụng dữ liệu từ Hive (Disk)...");
+      int conflictCount = 0;
 
-    //   for (var key in _hiveBox.keys) {
-    //     // Ép kiểu dynamic về List<double> an toàn
-    //     final rawList = _hiveBox.get(key);
-    //     if (rawList is List) {
-    //       List<double> vector = List<double>.from(rawList);
+      for (var key in _hiveBox.keys) {
+        // Ép kiểu dynamic về List<double> an toàn
+        final rawList = _hiveBox.get(key);
+        if (rawList is List) {
+          List<double> vector = List<double>.from(rawList);
 
-    //       if (vector.length == _outputSize) {
-    //         _faceDatabase[key.toString()] = vector;
-    //       } else {
-    //         conflictCount++;
-    //       }
-    //     }
-    //   }
-    //   debugPrint("📂 Đã load ${_faceDatabase.length} khuôn mặt từ Hive.");
-    //   if (conflictCount > 0) {
-    //     debugPrint(
-    //       "⚠️ CẢNH BÁO: Bỏ qua $conflictCount khuôn mặt do sai kích thước vector (Cần xóa DB cũ hoặc dùng đúng model).",
-    //     );
-    //   }
-    //   return;
-    // }
+          if (vector.length == _outputSize) {
+            _faceDatabase[key.toString()] = vector;
+          } else {
+            conflictCount++;
+          }
+        }
+      }
+      debugPrint("📂 Đã load ${_faceDatabase.length} khuôn mặt từ Hive.");
+      if (conflictCount > 0) {
+        debugPrint(
+          "⚠️ CẢNH BÁO: Bỏ qua $conflictCount khuôn mặt do sai kích thước vector (Cần xóa DB cũ hoặc dùng đúng model).",
+        );
+      }
+      return;
+    }
 
     // TRƯỜNG HỢP 2: Hive chưa có gì (Lần chạy đầu tiên) -> Đọc JSON"
     debugPrint(
@@ -156,68 +166,39 @@ class FaceRecognitionService {
     }
   }
 
-  /// --- CORE FUNCTION: CHUYỂN ẢNH THÀNH VECTOR ---
-  /// Input: cv.Mat
-  Future<List<double>> _getEmbedding(cv.Mat faceCropMat) async {
-    if (_interpreter == null) throw Exception("Interpreter chưa khởi tạo!");
+  Future<List<double>> _getEmbedding(List<double> inputTensor) async {
+    if (_interpreter == null) {
+      Exception("Interpreter chưa khởi tạo!");
+      return [];
+    }
 
-    cv.Mat? rgbMat;
-    cv.Mat? floatMat;
-
-    // try {
-    //   final dir = await getExternalStorageDirectory();
-    //   if (dir != null) {
-    //     // Kiểm tra null
-    //     // Lưu ảnh RGB ra để kiểm tra
-    //     // (Lưu ý: Khi mở ảnh này trên máy tính, màu sẽ bị ÁM XANH DƯƠNG
-    //     // vì file ảnh lưu dạng BGR, nhưng ta đang ép nó lưu data RGB.
-    //     // Nếu thấy ám xanh -> Code đúng. Nếu thấy màu da bình thường -> Code sai).
-    //     cv.imwrite("${dir.path}/debug_color_check.jpg", inputMat);
-    //     debugPrint(
-    //       "📸 Đã lưu ảnh debug màu tại: ${dir.path}/debug_color_check.jpg",
-    //     );
-    //   }
-    // } catch (e) {
-    //   debugPrint("❌ Lỗi khi lưu ảnh debug: $e");
-    // }
+    double expectedSize = _inputHeight * _inputWidth * _channels.toDouble();
+    if (inputTensor.length != expectedSize) {
+      debugPrint(
+        "🛑 LỖI INPUT MODEL: Kích thước sai lệch! "
+        "Nhận được ${inputTensor.length}, nhưng Model cần $expectedSize.\n"
+        "-> Có thể lỗi tại bước FaceAligner.",
+      );
+      // Trả về rỗng để Controller biết và bỏ qua frame này
+      return [];
+    }
 
     try {
-      // 1. Chuyển đổi không gian màu (BGR -> RGB)
-      // Model MobileFaceNet được train trên ảnh RGB.
-      rgbMat = cv.cvtColor(faceCropMat, cv.COLOR_BGR2RGB);
+      // 1. Reshape dữ liệu cho khớp với input của Model
+      // MobileFaceNet yêu cầu shape [1, 112, 112, 3]
+      // inputTensor từ FaceAligner đưa sang đang là mảng phẳng (flat list)
+      var inputBuffer = inputTensor.reshape([
+        1,
+        _inputHeight,
+        _inputWidth,
+        _channels,
+      ]);
 
-      if (rgbMat.rows != _inputHeight || rgbMat.cols != _inputWidth) {
-        var resized = cv.resize(rgbMat, (_inputWidth, _inputHeight));
-        rgbMat.dispose(); // Xóa ảnh cũ
-        rgbMat = resized; // Gán ảnh mới đã resize
-      }
-
-      // 2. Chuẩn hóa (Normalization)
-      // Chuyển pixel [0, 255] về khoảng [-1, 1]
-      // Công thức: (x - 127.5) / 128
-      floatMat = rgbMat.convertTo(
-        cv.MatType.CV_32FC3,
-        alpha: 1.0 / normStd,
-        beta: -normMean / normStd,
-      );
-
-      // 3. Chuẩn bị Input Tensor
-      // Lấy buffer dữ liệu từ Mat đã chuẩn hóa
-      final byteData = floatMat.data;
-      final floatList = Float32List.view(
-        byteData.buffer,
-        byteData.offsetInBytes,
-        byteData.lengthInBytes ~/ 4,
-      );
-
-      // Reshape khớp input model
-      var inputBuffer = floatList.reshape([1, _inputHeight, _inputWidth, 3]);
-
-      // Tạo buffer để hứng kết quả
+      // 2. Chuẩn bị Output Buffer để hứng kết quả
       var outputTensor = _interpreter!.getOutputTensor(0);
       Object outputBufferRaw;
 
-      // Luôn resize buffer theo đúng shape của tensor
+      // Luôn tạo buffer đúng kiểu dữ liệu của output model
       if (outputTensor.type == TensorType.float32) {
         outputBufferRaw = Float32List(_outputSize).reshape(outputTensor.shape);
       } else {
@@ -227,62 +208,55 @@ class FaceRecognitionService {
         ).reshape(outputTensor.shape);
       }
 
-      // Run Inference (Chạy AI)
+      // 3. Run Inference (Chạy AI)
       _interpreter!.run(inputBuffer, outputBufferRaw);
 
-      // 5. Lấy kết quả thô
-      // 6. Parse Output
+      // 4. Parse Output (Lấy kết quả ra)
       List<double> resultVector = [];
-      var batchResult = outputBufferRaw as List;
-      var firstResult = batchResult[0]; // Batch 0
 
-      if (firstResult is List) {
-        // Trường hợp output là mảng [1, 128]
-        resultVector = firstResult.map((e) => (e as num).toDouble()).toList();
-      } else {
-        // Trường hợp Flatten [128]
-        resultVector = batchResult.map((e) => (e as num).toDouble()).toList();
+      // Flatten dữ liệu (Làm phẳng mảng nhiều chiều thành 1 chiều)
+      if (outputBufferRaw is List) {
+        var batchResult = outputBufferRaw;
+        // Lấy batch đầu tiên (Batch 0)
+        var firstResult = (batchResult.isNotEmpty && batchResult[0] is List)
+            ? batchResult[0]
+            : batchResult;
+
+        if (outputTensor.type == TensorType.float32) {
+          // Cách tối ưu: Cast trực tiếp nếu là Float32
+          // Lưu ý: Tùy version tflite_flutter mà trả về List<double> hay Float32List
+          resultVector = List<double>.from(
+            firstResult.map((e) => (e as num).toDouble()),
+          );
+        } else {
+          // Nếu là Int8 -> Cần Dequantize (Optional, thường MobileFaceNet là Float output)
+          resultVector = firstResult.map((e) => (e as num).toDouble()).toList();
+        }
       }
 
-      // L2 Normalize
+      // 5. L2 Normalize (Bắt buộc để tính độ chính xác cao)
       return _l2Normalize(resultVector);
-    } catch (e) {
+    } catch (e, stack) {
       debugPrint("❌ Error in _getEmbedding: $e");
-      return List.filled(_outputSize, 0.0); // Trả về vector rỗng nếu lỗi
-    } finally {
-      // QUAN TRỌNG: Giải phóng bộ nhớ OpenCV
-      rgbMat?.dispose();
-      floatMat?.dispose();
+      debugPrintStack(stackTrace: stack);
+      // Trả về vector 0 nếu lỗi để không crash app
+      return [];
     }
   }
 
-  /// Hàm chính: Nhận ảnh Camera + Tọa độ mặt -> Trả về Tên người (nếu có)
-  Future<RecognitionResult> predict(cv.Mat faceCropMat) async {
-    // 1. Guard Clause: Kiểm tra hệ thống sẵn sàng chưa
+  Future<RecognitionResult> predict(List<double> inputTensor) async {
+    // 1. Guard Clause
     if (_interpreter == null || _faceDatabase.isEmpty) {
       return RecognitionResult("SystemNotReady", 0.0, true);
     }
 
     try {
-      // 1. Lấy embedding ảnh gốc
-      List<double> embeddingNormal = await _getEmbedding(faceCropMat);
+      // 2. Lấy embedding (Vector đặc trưng) từ Model
+      // Hàm _getEmbedding bây giờ nhận List<double> nên truyền thẳng vào
+      List<double> embedding = await _getEmbedding(inputTensor);
 
-      // // 2. Lấy embedding ảnh lật ngang (Mirror)
-      // cv.Mat flippedMat = cv.flip(faceCropMat, 1);
-      // List<double> embeddingMirrored = await _getEmbedding(flippedMat);
-      // flippedMat.dispose();
-
-      // // 3. Cộng gộp và chia đôi (Lấy trung bình)
-      // final int vectorDim = embeddingNormal.length;
-      // List<double> finalEmbedding = List.generate(vectorDim, (i) {
-      //   return (embeddingNormal[i] + embeddingMirrored[i]) / 2;
-      // });
-
-      // --- CHUẨN HÓA LẠI (RE-NORMALIZE) ---
-      embeddingNormal = _l2Normalize(embeddingNormal);
-
-      // --- TÌM NGƯỜI TRONG DATABASE ---
-      return _findClosestMatch(embeddingNormal);
+      // 3. TÌM NGƯỜI TRONG DATABASE
+      return _findClosestMatch(embedding);
     } catch (e) {
       debugPrint("❌ Lỗi khi predict: $e");
       return RecognitionResult("Error", 0.0, true);
@@ -333,23 +307,35 @@ class FaceRecognitionService {
     return dot;
   }
 
-  /// Hàm đăng ký nhân viên mới
-  /// Input: Tên nhân viên + Ảnh khuôn mặt đã Crop & Align (112x112)
-  Future<bool> register(String name, cv.Mat faceCropMat) async {
-    if (_interpreter == null) return false;
+  Future<bool> register(String name, List<double> inputTensor) async {
+    if (_interpreter == null) {
+      debugPrint("⚠️ Lỗi: Model chưa khởi tạo.");
+      return false;
+    }
+
+    if (inputTensor.isEmpty) {
+      debugPrint("⚠️ Lỗi: Dữ liệu đầu vào rỗng, không thể đăng ký.");
+      return false;
+    }
 
     try {
-      // 1. Lấy vector đặc trưng (Embedding)
-      // Lưu ý: Hàm _getEmbedding phải trả về vector đã L2 Normalize
-      List<double> embedding = await _getEmbedding(faceCropMat);
+      // 1. Chạy Model để lấy vector đặc trưng
+      List<double> embedding = await _getEmbedding(inputTensor);
 
-      // 2. Lưu vào RAM (để nhận diện được ngay lập tức)
+      if (embedding.isEmpty || embedding.length != _outputSize) {
+        debugPrint("❌ Lỗi: AI không tạo được vector hợp lệ. Hủy đăng ký.");
+        return false;
+      }
+
+      // 2. Lưu vào RAM
       _faceDatabase[name] = embedding;
 
-      // 3. Lưu vào Ổ cứng (Hive) (để tắt app không mất)
+      // 3. Lưu vào Hive (Disk)
       await _hiveBox.put(name, embedding);
 
-      debugPrint("✅ Đã đăng ký thành công: $name");
+      debugPrint(
+        "✅ Đã đăng ký thành công: $name (Vector size: ${embedding.length})",
+      );
       return true;
     } catch (e) {
       debugPrint("❌ Lỗi đăng ký: $e");
@@ -357,29 +343,48 @@ class FaceRecognitionService {
     }
   }
 
-  /// Cập nhật khuôn mặt đã có (Cộng gộp Vector cũ + mới)
-  Future<bool> update(String name, cv.Mat faceCropMat) async {
+  Future<bool> update(String name, List<double> inputTensor) async {
     if (_interpreter == null) return false;
+    if (inputTensor.isEmpty) return false;
 
     try {
-      // 1. Lấy Embedding MỚI
-      List<double> newEmbedding = await _getEmbedding(faceCropMat);
+      // 1. Lấy Embedding MỚI từ ảnh input
+      List<double> newEmbedding = await _getEmbedding(inputTensor);
 
-      // 2. Lấy Embedding CŨ
+      if (newEmbedding.isEmpty || newEmbedding.length != _outputSize) {
+        debugPrint("❌ Lỗi update: AI trả về vector rỗng hoặc sai kích thước.");
+        return false;
+      }
+
+      // 2. Lấy Embedding CŨ từ Database
       List<double>? oldEmbedding = _faceDatabase[name];
 
       if (oldEmbedding == null) {
-        // Nếu không tìm thấy cũ (lỗi lạ), thì coi như đăng ký mới
-        return register(name, faceCropMat);
+        debugPrint(
+          "ℹ️ Chưa có dữ liệu cũ của $name -> Chuyển sang đăng ký mới.",
+        );
+        return register(name, inputTensor);
+      }
+
+      if (oldEmbedding.length != newEmbedding.length) {
+        debugPrint(
+          "⚠️ Lỗi phiên bản Model: Data cũ (${oldEmbedding.length}) khác Data mới (${newEmbedding.length}).\n"
+          "👉 Ghi đè lại bằng dữ liệu mới!",
+        );
+        // Trong trường hợp này, ta nên GHI ĐÈ (Overwrite) thay vì cộng gộp lỗi
+        return register(name, inputTensor);
       }
 
       // 3. THUẬT TOÁN MERGE (Trung bình cộng)
-      // Công thức: V_final = Normalize(V_old + V_new)
-      List<double> mergedEmbedding = List.generate(192, (index) {
+      // Công thức: V_avg = (V_old + V_new) / 2 (Sau đó normalize lại)
+      // Ở đây ta cộng trực tiếp rồi Normalize cũng tương đương về hướng vector.
+      List<double> mergedEmbedding = List.generate(oldEmbedding.length, (
+        index,
+      ) {
         return oldEmbedding[index] + newEmbedding[index];
       });
 
-      // 4. Chuẩn hóa lại (Bắt buộc để dùng Cosine Similarity)
+      // 4. Chuẩn hóa lại (QUAN TRỌNG: Tổng của 2 vector đơn vị không phải là vector đơn vị)
       mergedEmbedding = _l2Normalize(mergedEmbedding);
 
       // 5. Lưu lại

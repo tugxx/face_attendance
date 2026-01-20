@@ -1,0 +1,68 @@
+I/flutter (11970): --- 🕵️ BẮT ĐẦU KIỂM TRA CHẤT LƯỢNG DỮ LIỆU ---
+I/flutter (11970): 👤 chutu (10 cặp ảnh): Trung bình sai số = 0.756 -> ! Tạm
+I/flutter (11970): ! ductuyen: Chỉ có 1 ảnh -> Không thể kiểm tra độ ổn định.
+I/flutter (11970): ! lekien: Chỉ có 1 ảnh -> Không thể kiểm tra độ ổn định.
+I/flutter (11970): ! minhthu: Chỉ có 1 ảnh -> Không thể kiểm tra độ ổn định.
+I/flutter (11970): 👤 nguyentu (3 cặp ảnh): Trung bình sai số = 0.641 -> ! Tạm
+I/flutter (11970): ! trongdan: Chỉ có 1 ảnh -> Không thể kiểm tra độ ổn định.
+I/flutter (11970): 👤 viettuan (1 cặp ảnh): Trung bình sai số = 0.561 -> ❌ KHÔNG ỔN ĐỊNH
+I/flutter (11970): 👤 xuantung (1 cặp ảnh): Trung bình sai số = 0.764 -> ! Tạm
+I/flutter (11970): => Sai số nội bộ trung bình toàn data: 0.681
+I/flutter (11970): 
+I/flutter (11970): --- ⚔️ KIỂM TRA PHÂN BIỆT GIỮA CÁC NGƯỜI DÙNG ---
+I/flutter (11970): ✅ Tốt chutu vs ductuyen: Sim = 0.104 
+I/flutter (11970): ✅ Tốt chutu vs lekien: Sim = 0.078 
+I/flutter (11970): ✅ Tốt chutu vs minhthu: Sim = 0.024 
+I/flutter (11970): ✅ Tốt chutu vs nguyentu: Sim = 0.042 
+I/flutter (11970): ✅ Tốt chutu vs trongdan: Sim = 0.021 
+I/flutter (11970): ✅ Tốt chutu vs viettuan: Sim = 0.073 
+I/flutter (11970): ✅ Tốt chutu vs xuantung: Sim = 0.211 
+I/flutter (11970): ✅ Tốt ductuyen vs lekien: Sim = 0.181 
+I/flutter (11970): ✅ Tốt ductuyen vs minhthu: Sim = 0.020 
+I/flutter (11970): ✅ Tốt ductuyen vs nguyentu: Sim = 0.083 
+I/flutter (11970): ✅ Tốt ductuyen vs trongdan: Sim = 0.199 
+I/flutter (11970): ✅ Tốt ductuyen vs viettuan: Sim = 0.194 
+I/flutter (11970): ✅ Tốt ductuyen vs xuantung: Sim = 0.067 
+I/flutter (11970): ✅ Tốt lekien vs minhthu: Sim = 0.133 
+I/flutter (11970): ✅ Tốt lekien vs nguyentu: Sim = -0.003 
+I/flutter (11970): ✅ Tốt lekien vs trongdan: Sim = 0.074 
+I/flutter (11970): ✅ Tốt lekien vs viettuan: Sim = -0.009 
+I/flutter (11970): ✅ Tốt lekien vs xuantung: Sim = 0.104 
+I/flutter (11970): ✅ Tốt minhthu vs nguyentu: Sim = -0.039 
+I/flutter (11970): ✅ Tốt minhthu vs trongdan: Sim = 0.008 
+I/flutter (11970): ✅ Tốt minhthu vs viettuan: Sim = 0.022 
+I/flutter (11970): ✅ Tốt minhthu vs xuantung: Sim = 0.077 
+I/flutter (11970): ✅ Tốt nguyentu vs trongdan: Sim = 0.074 
+I/flutter (11970): ✅ Tốt nguyentu vs viettuan: Sim = 0.017 
+I/flutter (11970): ✅ Tốt nguyentu vs xuantung: Sim = 0.056 
+I/flutter (11970): ✅ Tốt trongdan vs viettuan: Sim = 0.302 
+I/flutter (11970): ✅ Tốt trongdan vs xuantung: Sim = 0.108 
+I/flutter (11970): ✅ Tốt viettuan vs xuantung: Sim = 0.126 
+I/flutter (11970): --------------------------------------------------
+I/flutter (11970): => Khoảng cách tách biệt trung bình: 0.084
+I/flutter (11970): 🌟 TỔNG KẾT: Model phân biệt RẤT TỐT! (Margin: 0.60)
+I/flutter (11970): --------------------------------------------------
+
+{
+    "model_info":
+    {
+        "name":"w600k_mbf_float32.tflite",
+        "input_height":112,
+        "input_width":112,
+        "channels":3,
+        "output_dim":512,
+        "file_size_mb":6.53
+    },
+    "performance":
+    {
+        "total_images":17,
+        "total_time_ms":13252,
+        "avg_ms_per_image":779.5
+    },
+    "quality_metrics":
+    {
+        "avg_intra_sim":0.6805,
+        "avg_inter_sim":0.0838,
+        "quality_margin":0.5967
+    }
+}

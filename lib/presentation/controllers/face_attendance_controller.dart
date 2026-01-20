@@ -7,11 +7,32 @@ import 'package:flutter/foundation.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter/services.dart';
-import 'package:opencv_dart/opencv_dart.dart' as cv;
 
 import '../../app/utils/camera_utils.dart';
 import '../../app/services/face_recognition_service.dart';
 import '../../app/types/face_progress.dart';
+
+class FaceCheckinState {
+  // Biến cấu hình
+  static const int requiredRecognitionStreak =
+      3; // Cần 3 lần nhận diện đúng tên
+  static const int requiredLivenessStreak = 3; // Cần 3 lần check liveness OK
+
+  // Biến trạng thái runtime
+  String? currentCandidate; // Tên người đang theo dõi
+  int matchStreak = 0; // Đếm số lần nhận diện đúng liên tiếp
+  int livenessStreak = 0; // Đếm số lần liveness pass liên tiếp
+  bool isSuccessCooldown = false; // Chế độ chờ sau khi điểm danh thành công
+
+  void reset() {
+    currentCandidate = null;
+    matchStreak = 0;
+    livenessStreak = 0;
+  }
+}
+
+// Khởi tạo instance (Để trong Controller của bạn)
+final checkinState = FaceCheckinState();
 
 class FaceAttendanceController extends GetxController {
   CameraController? cameraController;
@@ -78,8 +99,6 @@ class FaceAttendanceController extends GetxController {
     _lastRecognitionTime = DateTime.now();
   }
 
-  
-
   // Future<String?> _generateDebugPath() async {
   //   try {
   //     final dir = await getExternalStorageDirectory();
@@ -98,62 +117,126 @@ class FaceAttendanceController extends GetxController {
   //   return null;
   // }
 
-  Future<void> _performRecognition(List<int> jpgBytes) async {
-    debugPrint("🤖 Isolate xong. Predict...");
-    // imdecode: Tự động hiểu file JPG và bung ra thành Ma trận điểm ảnh (Mat)
-    // cv.IMREAD_COLOR: Đảm bảo đọc đủ 3 kênh màu BGR
-    cv.Mat faceMat = cv.imdecode(Uint8List.fromList(jpgBytes), cv.IMREAD_COLOR);
+  Future<bool> _predictAntiSpoofing(List<double> facePixels) async {
+    // TODO: Gọi model Anti-Spoofing của bạn ở đây
+    // Return true nếu là người thật, false nếu là giả mạo
+    await Future.delayed(const Duration(milliseconds: 10));
+    return true;
+  }
 
-    if (faceMat.isEmpty) {
-       debugPrint("⚠️ Lỗi: Ảnh decode ra bị rỗng!");
-       faceMat.dispose();
-       isProcessing.value = false;
-       return;
+  Future<void> _performRecognition(
+    List<double> facePixels,
+    Stopwatch sw,
+  ) async {
+    if (checkinState.isSuccessCooldown) {
+      isProcessing.value = false;
+      return;
     }
+
+    if (facePixels.isEmpty) {
+      debugPrint("⚠️ Lỗi: Dữ liệu khuôn mặt rỗng!");
+      isProcessing.value = false;
+      return;
+    }
+
+    int tStartAI = sw.elapsedMilliseconds;
 
     try {
-      debugPrint("🤖 Đang nhận diện...");
+      // ---------------------------------------------------------
+      // TỐI ƯU 1: CHẠY SONG SONG (Parallel Execution)
+      // Thay vì await từng cái, ta bắn cả 2 model cùng lúc
+      // (Lưu ý: Tùy vào device, đôi khi chạy tuần tự nhanh hơn nếu GPU bị lock,
+      // nhưng về mặt logic luồng thì code này gọn hơn).
+      // ---------------------------------------------------------
 
-      // 2. Gọi AI Service dự đoán
-      final result = await _aiService.predict(faceMat);
+      // Gọi nhận diện danh tính
+      final futureIdentity = _aiService.predict(facePixels);
 
-      // 3. Xử lý kết quả
-      if (!result.isUnknown) {
-        // success
-        recognizedName.value = result.name;
+      // Gọi Liveness (Anti-Spoofing) luôn, không cần chờ ID
+      final futureLiveness = _predictAntiSpoofing(facePixels);
+
+      // Chờ cả 2 kết quả trả về
+      final results = await Future.wait([futureIdentity, futureLiveness]);
+
+      futureIdentity.then((recognition) {
+        debugPrint("Độ similarity: ${recognition.distance}");
+      });
+
+      int tEndAI = sw.elapsedMilliseconds;
+      debugPrint("3️⃣ AI Inference (2 Models): ${tEndAI - tStartAI} ms");
+
+      final RecognitionResult idResult = results[0] as RecognitionResult;
+      final bool isRealPerson = results[1] as bool;
+
+      String detectedName = idResult.isUnknown ? "Unknown" : idResult.name;
+
+      // ---------------------------------------------------------
+      // TỐI ƯU 2: GỘP LOGIC (Combined Logic)
+      // Điều kiện: Phải ĐÚNG NGƯỜI và PHẢI LÀ NGƯỜI THẬT cùng lúc
+      // ---------------------------------------------------------
+
+      if (detectedName != "Unknown" && isRealPerson) {
+        // Nếu là người mới hoặc đang track dở người này
+        if (detectedName == checkinState.currentCandidate) {
+          checkinState.matchStreak++; // Tăng điểm tin cậy
+        } else {
+          // Đổi người -> Reset
+          checkinState.currentCandidate = detectedName;
+          checkinState.matchStreak = 1;
+          debugPrint("🔄 Tracking new: $detectedName");
+        }
+
+        // TỐI ƯU 3: BỎ UI NẶNG (Get.snackbar)
+        // Chỉ in log hoặc update biến nhẹ nhàng để UI tự build lại (dùng Obx/ValueListenable)
         debugPrint(
-          "✅ NHẬN DIỆN THÀNH CÔNG: ${result.name} || Score: ${result.distance.toStringAsFixed(4)}",
+          "🚀 Verified: $detectedName | Progress: ${checkinState.matchStreak}/3",
         );
 
-        Get.snackbar(
-          "Điểm danh thành công",
-          "Xin chào, ${result.name}!",
-          backgroundColor: Colors.green.withValues(alpha: 0.9),
-          colorText: Colors.white,
-          icon: const Icon(Icons.check_circle, color: Colors.white),
-          duration: const Duration(seconds: 2),
-          snackPosition: SnackPosition.TOP,
-          margin: const EdgeInsets.all(10),
-        );
-
-        await Future.delayed(const Duration(seconds: 3));
-        // SystemNavigator.pop(); // Hoặc navigate đi đâu đó
-
-        // 4. Reset trạng thái để chuẩn bị cho người tiếp theo
-        recognizedName.value = ""; // Xóa tên trên màn hình
-        isProcessing.value = false; // Mở khóa luồng
+        // Đủ điều kiện check-in (Ví dụ: 3 lần liên tiếp đúng cả ID lẫn Liveness)
+        if (checkinState.matchStreak >=
+            FaceCheckinState.requiredRecognitionStreak) {
+          await _handleCheckinSuccess(checkinState.currentCandidate!);
+        }
       } else {
-        recognizedName.value = "Unknown";
-        debugPrint("⚠️ Người lạ (Dist: ${result.distance.toStringAsFixed(2)})");
-        isProcessing.value = false; // Mở khóa ngay lập tức
+        // ❌ FAILED (Hoặc là Unknown, hoặc là Fake)
+        if (!isRealPerson && detectedName != "Unknown") {
+          debugPrint("⚠️ SPOOF DETECTED for $detectedName");
+          // Có thể show cảnh báo nhỏ ở đây nếu cần thiết, nhưng đừng dùng Snackbar chặn màn hình
+        }
+
+        // Reset streak nếu đứt quãng
+        checkinState.matchStreak = 0;
+        // Không reset currentCandidate ngay để tránh UI nhấp nháy, chỉ reset điểm
       }
-    } catch (e) {
-      debugPrint("❌ Lỗi AI Predict: $e");
-      isProcessing.value = false;
+    } catch (e, stack) {
+      debugPrint("❌ Error: $e");
+      debugPrint('Stack trace: $stack');
     } finally {
-      // Giải phóng bộ nhớ Mat sau khi dùng xong
-      faceMat.dispose();
+      isProcessing.value = false; // Mở khóa luồng
     }
+  }
+
+  Future<void> _handleCheckinSuccess(String name) async {
+    checkinState.isSuccessCooldown = true; // Khóa hệ thống
+
+    debugPrint("🎉 CHECKIN SUCCESS: $name");
+
+    Get.snackbar(
+      "Điểm danh thành công",
+      "Xin chào, $name!",
+      backgroundColor: Colors.green,
+      colorText: Colors.white,
+      icon: const Icon(Icons.check_circle, color: Colors.white),
+      duration: const Duration(seconds: 2),
+    );
+
+    // Gửi API log lên server tại đây...
+
+    // Wait 3 giây rồi reset (Logic Python: success_mode active duration)
+    await Future.delayed(const Duration(seconds: 3));
+
+    checkinState.reset();
+    checkinState.isSuccessCooldown = false; // Mở khóa lại
   }
 
   void _safeguardUnlock() async {
@@ -188,7 +271,7 @@ class FaceAttendanceController extends GetxController {
       // 2. Cấu hình ML Kit
       _faceDetector = FaceDetector(
         options: FaceDetectorOptions(
-          performanceMode: FaceDetectorMode.accurate, // Ưu tiên độ chính xác
+          performanceMode: FaceDetectorMode.fast, // Ưu tiên độ chính xác
           enableContours:
               false, // Không cần vẽ đường viền bao quanh mặt (giúp giảm tải xử lý nếu không dùng để vẽ UI).
           // Bật tìm các điểm mốc (Mắt, mũi, miệng, má...).
@@ -238,7 +321,7 @@ class FaceAttendanceController extends GetxController {
       // 4. CẤU HÌNH CONTROLLER
       cameraController = CameraController(
         _currentCamera!,
-        ResolutionPreset.high,
+        ResolutionPreset.medium,
         enableAudio: false, // Tắt thu âm cho nhẹ, vì chấm công không cần tiếng
         imageFormatGroup: Platform.isAndroid
             ? ImageFormatGroup
@@ -267,72 +350,99 @@ class FaceAttendanceController extends GetxController {
     if (_isDetecting) return;
     _isDetecting = true;
 
+    // ⏱️ BẮT ĐẦU ĐỒNG HỒ
+    final Stopwatch sw = Stopwatch()..start();
+
     Face? face;
+    
     try {
-      // 2. Detect khuôn mặt (ML Kit)
+      // 1. Detect khuôn mặt (ML Kit - Giữ nguyên)
       face = await _detectFaceFromImage(image);
+      
     } catch (e) {
       debugPrint("Error detecting: $e");
     } finally {
-      // 🛑 QUAN TRỌNG: Mở khóa ngay lập tức để frame sau có thể tiếp tục vẽ khung
-      // Dù có tìm thấy mặt hay không, dù có lỗi hay không, cũng phải mở cửa.
-      _isDetecting = false;
+      _isDetecting = false; // Luôn mở khóa detect
     }
 
-    // Nếu không có mặt hoặc đang xử lý frame khác -> Dừng
-    if (face == null) return;
+    int tDetect = sw.elapsedMilliseconds;
 
-    // 2. Kiểm tra điều kiện Throttling (500ms mới nhận diện 1 lần)
+    // Nếu không có mặt -> Dừng
+    if (face == null) {
+      if (checkinState.matchStreak > 0) {
+        checkinState.matchStreak = 0;
+        debugPrint("❌ Face lost. Reset streak.");
+      }
+      return;
+    }
+
+    // Log Detect (Nên < 80ms)
+    debugPrint("1️⃣ Detect: ${tDetect}ms");
+
+    // 2. Throttling (Giữ nguyên)
     if (_shouldSkipRecognition()) return;
 
-    // 3. Khoá luồng để bắt đầu xử lý (ko nhận frame mới)
+    // 3. Khoá luồng xử lý nhận diện
     _lockProcessing();
 
     try {
-      // 4. Chuẩn bị dữ liệu cho Isolate
+      // 4. Chuẩn bị dữ liệu gửi sang Isolate
+      // Copy YUV bytes (Phải copy vì CameraImage buffer sẽ bị hủy ở frame sau)
       final rawBytes = CameraUtils.cloneCameraBytes(image);
 
-      // final debugPath = await _generateDebugPath();
-
-      // Tính toán vùng crop
-      final cropRect = CameraUtils.calculateCropRect(face, image.width, image.height);
-
+      // Tạo Request (Lưu ý: Bỏ các tham số cropW, cropH vì Dart Processor tự tính)
       final request = FaceProcessRequest(
         yuvBytes: rawBytes,
         width: image.width,
         height: image.height,
-        face: face, // Đã truyền face chuẩn
-        cropX: cropRect.left.toInt(),
-        cropY: cropRect.top.toInt(),
-        cropW: cropRect.width.toInt(),
-        cropH: cropRect.height.toInt(),
+        face: face,
         sensorOrientation: _currentCamera!.sensorOrientation,
         isAndroid: Platform.isAndroid,
-        // debugPath: debugPath,
         rootToken: RootIsolateToken.instance,
       );
 
-      // 5. Gửi sang Isolate (Nặng nhất)
+      // 5. Gửi sang Isolate -> Gọi C++ Native
+      // Đo thời gian bắt đầu gửi
+      int tStartCrop = sw.elapsedMilliseconds;
+
+      // 5. Gửi sang Isolate (Xử lý ảnh bằng Dart thuần)
+      // Input: YUV -> Output: List<double> (Pixels đã chuẩn hóa)
       debugPrint("🚀 Gửi task sang Isolate...");
-      final List<int>? alignedFaceBytes = await compute(
+
+      final List<double>? facePixels = await compute(
         isolateFaceProcessor,
         request,
       );
 
-      // 6. Predict & Update UI
-      if (alignedFaceBytes != null) {
-        await _performRecognition(alignedFaceBytes);
+      int tEndCrop = sw.elapsedMilliseconds;
+      int tCrop = tEndCrop - tStartCrop; // Thời gian thực tế của bước Crop
+
+      // 6. Có kết quả từ Isolate -> Đưa vào Model
+      if (facePixels != null) {
+        await _performRecognition(facePixels, sw);
+
+        int tTotal = sw.elapsedMilliseconds;
+
+        debugPrint(
+          "⏱️ [${tTotal}ms] "
+          "Detect: ${tDetect}ms | "
+          "Crop: ${tCrop}ms | "
+          "AI: ${tTotal - tEndCrop}ms | "
+          "FPS: ${(1000 / tTotal).toStringAsFixed(1)}",
+        );
       } else {
-        // Isolate trả về null (lỗi xử lý ảnh) -> Unlock ngay
+        debugPrint("⚠️ Isolate trả về null (Do mặt nghiêng hoặc lỗi ảnh)");
         isProcessing.value = false;
       }
     } catch (e, s) {
       debugPrint("❌ Lỗi processFrame: $e");
       debugPrintStack(stackTrace: s);
-      isProcessing.value = false; // Mở khóa nếu lỗi
+      isProcessing.value = false;
     } finally {
-      // _isBusy = false;
-      _safeguardUnlock(); // Đảm bảo không bị deadlock
+      _safeguardUnlock(); // Đảm bảo an toàn
+
+      // // Tổng kết thời gian 1 frame
+      sw.stop();
     }
   }
 

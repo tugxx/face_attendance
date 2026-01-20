@@ -5,12 +5,81 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
-import 'package:opencv_dart/opencv_dart.dart' as cv;
+import 'package:image/image.dart' as img;
 import 'package:permission_handler/permission_handler.dart';
 
 import '../../app/types/face_progress.dart';
 import '../../app/utils/camera_utils.dart';
 import '../../app/services/face_recognition_service.dart';
+
+class RegistrationResult {
+  final List<double> aiPixels; // Input cho Model AI
+  final Uint8List displayBytes; // Ảnh JPG để hiển thị UI
+
+  RegistrationResult(this.aiPixels, this.displayBytes);
+}
+
+/// Hàm Isolate chuyên dụng cho Đăng ký (Trả về cả Data + Hình ảnh)
+Future<RegistrationResult?> isolateRegistrationProcessor(
+  FaceProcessRequest request,
+) async {
+  // 1. Init
+  if (request.rootToken != null) {
+    BackgroundIsolateBinaryMessenger.ensureInitialized(request.rootToken!);
+  }
+
+  try {
+    // ------------------------------------------------------------------
+    // BƯỚC 1: Dùng C++ Native để Cắt & Căn chỉnh (Siêu nhanh ~5ms)
+    // ------------------------------------------------------------------
+    // Thay vì dùng FaceProcessorDart.convertNV21... cũ kỹ
+    final List<double>? aiPixels = FaceProcessorNative.process(
+      request.yuvBytes,
+      request.width,
+      request.height,
+      request.face,
+      request.sensorOrientation,
+    );
+
+    if (aiPixels == null) return null;
+
+    // ------------------------------------------------------------------
+    // BƯỚC 2: Tạo ảnh hiển thị từ dữ liệu AI (Reconstruct Image)
+    // ------------------------------------------------------------------
+    // Vì aiPixels là dữ liệu đã được Align chuẩn 112x112, ta chỉ cần
+    // chuyển nó ngược lại thành ảnh để user xem mình vừa chụp gì.
+
+    final image = img.Image(width: 112, height: 112);
+
+    for (int y = 0; y < 112; y++) {
+      for (int x = 0; x < 112; x++) {
+        int index = (y * 112 + x) * 3;
+
+        // Denormalize: Lấy giá trị (-1 đến 1) chuyển lại thành (0 đến 255)
+        // Công thức MobileFaceNet: pixel = (norm * 128.0) + 127.5
+
+        double r = (aiPixels[index] * 128.0) + 127.5;
+        double g = (aiPixels[index + 1] * 128.0) + 127.5;
+        double b = (aiPixels[index + 2] * 128.0) + 127.5;
+
+        // Set pixel vào ảnh (img v4)
+        image.setPixelRgb(x, y, r.toInt(), g.toInt(), b.toInt());
+      }
+    }
+
+    // ------------------------------------------------------------------
+    // BƯỚC 3: Encode JPG để hiển thị UI
+    // ------------------------------------------------------------------
+    Uint8List displayBytes = Uint8List.fromList(
+      img.encodeJpg(image, quality: 100),
+    );
+
+    return RegistrationResult(aiPixels, displayBytes);
+  } catch (e) {
+    debugPrint("Isolate Registration Error: $e");
+    return null;
+  }
+}
 
 class FaceRegisterController extends GetxController {
   CameraController? cameraController;
@@ -219,8 +288,8 @@ class FaceRegisterController extends GetxController {
     // 2. Mặt phải nhìn thẳng (Không nghiêng quá nhiều)
     // HeadEulerAngleY: Quay trái/phải
     // HeadEulerAngleZ: Nghiêng đầu
-    if ((face.headEulerAngleY ?? 0).abs() > 10) return false;
-    if ((face.headEulerAngleZ ?? 0).abs() > 10) return false;
+    if ((face.headEulerAngleY ?? 0).abs() > 30) return false;
+    if ((face.headEulerAngleZ ?? 0).abs() > 30) return false;
 
     // C. Mặt phải ở trung tâm (Tránh bị cắt cằm/trán)
     // (Có thể thêm logic check tọa độ boundingBox nằm trong vùng an toàn giữa màn hình)
@@ -229,94 +298,84 @@ class FaceRegisterController extends GetxController {
   }
 
   Future<void> _autoCapture(CameraImage image, Face face) async {
-    // Dừng xử lý frame tiếp theo ngay lập tức
     isRegistering.value = true;
-    _stableFrameCount = 0; // Reset đếm
+    _stableFrameCount = 0;
 
-    // Rung nhẹ 1 cái báo hiệu đã chụp (UX tốt)
     HapticFeedback.mediumImpact();
-
-    // Tạm dừng camera stream để "đóng băng" hình ảnh
     await cameraController?.stopImageStream();
 
     try {
-      debugPrint("📸 Capturing face...");
+      debugPrint("📸 Capturing face for Registration...");
 
-      // Xử lý cắt ảnh (Isolate)
       final rawBytes = CameraUtils.cloneCameraBytes(image);
-      final cropRect = CameraUtils.calculateCropRect(
-        face,
-        image.width,
-        image.height,
-      );
 
+      // Tạo request
       final request = FaceProcessRequest(
         yuvBytes: rawBytes,
         width: image.width,
         height: image.height,
         face: face,
-        cropX: cropRect.left.toInt(),
-        cropY: cropRect.top.toInt(),
-        cropW: cropRect.width.toInt(),
-        cropH: cropRect.height.toInt(),
         sensorOrientation: _currentCamera!.sensorOrientation,
         isAndroid: Platform.isAndroid,
         rootToken: RootIsolateToken.instance,
       );
 
-      final List<int>? alignedBytes = await compute(
-        isolateFaceProcessor,
+      // GỌI ISOLATE MỚI (isolateRegistrationProcessor)
+      final RegistrationResult? result = await compute(
+        isolateRegistrationProcessor,
         request,
       );
 
-      if (alignedBytes != null && alignedBytes.isNotEmpty) {
-        // Hiện Dialog nhập tên
-        await _checkDuplicateAndShowDialog(alignedBytes);
+      if (result != null) {
+        // Có kết quả -> Chuyển sang check trùng
+        // result.aiPixels: Dùng để tính toán
+        // result.displayBytes: Dùng để hiển thị
+        await _checkDuplicateAndShowDialog(
+          result.aiPixels,
+          result.displayBytes,
+        );
       } else {
-        Get.snackbar("Lỗi", "Không thể xử lý khuôn mặt, vui lòng thử lại");
+        Get.snackbar("Lỗi", "Không thể xử lý ảnh, hãy thử lại");
         _resumeCamera();
       }
     } catch (e) {
       debugPrint("❌ Capture Error: $e");
-      Get.snackbar("Lỗi", "Đã xảy ra lỗi khi chụp: $e");
+      Get.snackbar("Lỗi", "Đã xảy ra lỗi: $e");
       _resumeCamera();
     }
   }
 
   // Logic kiểm tra trùng lặp trước khi cho nhập tên
-  Future<void> _checkDuplicateAndShowDialog(List<int> faceBytes) async {
-    cv.Mat? faceMat;
-
+  Future<void> _checkDuplicateAndShowDialog(
+    List<double> aiPixels,
+    Uint8List displayBytes,
+  ) async {
     try {
-      // Convert JPG Bytes -> OpenCV Mat để đưa vào AI
-      faceMat = cv.imdecode(
-        Uint8List.fromList(faceBytes),
-        cv.IMREAD_COLOR,
-      );
+      // 1. Chạy AI Predict (Dùng aiPixels - List<double>)
+      // Không cần convert Mat nữa!
+      final result = await _aiService.predict(aiPixels);
 
-      // Chạy nhận diện thử
-      final result = await _aiService.predict(faceMat);
-
-      // PHÁT HIỆN TRÙNG (Đã có trong DB)
+      // 2. PHÁT HIỆN NGƯỜI QUEN
       if (!result.isUnknown) {
-        // Hiện Dialog lựa chọn
+        // [UX] Rung nhẹ để báo hiệu nhận ra người quen
+        HapticFeedback.lightImpact();
+
         await Get.defaultDialog(
           title: "Người Quen!",
           barrierDismissible: false,
           content: Column(
             children: [
-              // Ảnh vừa chụp
               ClipOval(
                 child: Image.memory(
-                  Uint8List.fromList(faceBytes),
-                  width: 100,
-                  height: 100,
+                  displayBytes, // Hiển thị ảnh JPG
+                  width: 120,
+                  height: 120,
                   fit: BoxFit.cover,
                 ),
               ),
               const SizedBox(height: 15),
               Text(
-                "Hệ thống nhận diện đây là:\n${result.name}",
+                "Hệ thống nhận diện:\n${result.name}",
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                   fontWeight: FontWeight.bold,
@@ -324,30 +383,34 @@ class FaceRegisterController extends GetxController {
                 ),
               ),
               const SizedBox(height: 5),
+              // [UX] Thêm thanh progress bar mô phỏng độ tin cậy
+              LinearProgressIndicator(
+                value: result
+                    .distance, // Giả sử distance đã normalized 0-1 (hoặc similarity)
+                backgroundColor: Colors.grey[200],
+                color: Colors.green,
+                minHeight: 8,
+                borderRadius: BorderRadius.circular(4),
+              ),
               Text(
-                "Độ trùng khớp: ${(result.distance * 100).toStringAsFixed(1)}%",
+                "Độ tin cậy: ${(result.distance * 100).toStringAsFixed(1)}%",
                 style: TextStyle(color: Colors.grey[600], fontSize: 12),
               ),
               const SizedBox(height: 20),
-              const Text(
-                "Bạn muốn làm gì?",
-                style: TextStyle(fontStyle: FontStyle.italic),
-              ),
             ],
           ),
 
-          // NÚT 1: CẬP NHẬT (Merge Vector)
+          // NÚT 1: CẬP NHẬT
           confirm: SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
               icon: const Icon(Icons.merge_type),
-              label: const Text("Cập nhật thêm góc mặt"),
+              label: const Text("Cập nhật thêm dữ liệu"),
               style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
               onPressed: () async {
-                Get.back(); // Đóng dialog
-                // Gọi hàm update (Cộng gộp)
-                bool success = await _aiService.update(result.name, faceMat!);
-                faceMat.dispose();
+                Get.back();
+                // Gọi Service Update (Input là List<double>)
+                bool success = await _aiService.update(result.name, aiPixels);
                 _handleResult(
                   success,
                   "Đã cập nhật dữ liệu cho ${result.name}",
@@ -356,7 +419,7 @@ class FaceRegisterController extends GetxController {
             ),
           ),
 
-          // NÚT 2: GHI ĐÈ (Overwrite)
+          // NÚT 2: GHI ĐÈ & ĐĂNG KÝ MỚI
           cancel: Column(
             children: [
               const SizedBox(height: 10),
@@ -364,18 +427,16 @@ class FaceRegisterController extends GetxController {
                 width: double.infinity,
                 child: OutlinedButton.icon(
                   icon: const Icon(Icons.refresh),
-                  label: const Text("Làm mới hoàn toàn (Ghi đè)"),
+                  label: const Text("Ghi đè (Reset)"),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: Colors.orange,
                   ),
                   onPressed: () async {
                     Get.back();
-                    // Gọi hàm register (Ghi đè) với tên cũ
                     bool success = await _aiService.register(
                       result.name,
-                      faceMat!,
+                      aiPixels,
                     );
-                    faceMat.dispose();
                     _handleResult(
                       success,
                       "Đã làm mới dữ liệu của ${result.name}",
@@ -383,17 +444,14 @@ class FaceRegisterController extends GetxController {
                   },
                 ),
               ),
-              const SizedBox(height: 5),
-              // NÚT 3: KHÔNG PHẢI TÔI (Đăng ký mới)
               TextButton(
                 child: const Text(
-                  "Không phải, tôi là người mới",
+                  "Không phải, người mới",
                   style: TextStyle(color: Colors.grey),
                 ),
                 onPressed: () {
                   Get.back();
-                  faceMat?.dispose();
-                  _showNameInputDialog(faceBytes); // Mở dialog nhập tên mới
+                  _showNameInputDialog(aiPixels, displayBytes);
                 },
               ),
             ],
@@ -402,14 +460,12 @@ class FaceRegisterController extends GetxController {
         return;
       }
 
-      // Nếu là người mới -> OK cho nhập tên
-      faceMat.dispose();
-      _showNameInputDialog(faceBytes);
+      // 3. NGƯỜI MỚI -> Nhập tên
+      _showNameInputDialog(aiPixels, displayBytes);
     } catch (e) {
       debugPrint("Duplicate check error: $e");
-      faceMat?.dispose();
-      // Nếu lỗi check thì cứ cho hiện dialog nhập tên
-      _showNameInputDialog(faceBytes);
+      // Lỗi thì cứ cho nhập tên
+      _showNameInputDialog(aiPixels, displayBytes);
     }
   }
 
@@ -424,19 +480,21 @@ class FaceRegisterController extends GetxController {
     }
   }
 
-  Future<void> _showNameInputDialog(List<int> faceBytes) async {
+  Future<void> _showNameInputDialog(
+    List<double> aiPixels,
+    Uint8List displayBytes,
+  ) async {
     final nameController = TextEditingController();
 
     await Get.defaultDialog(
       title: "Đăng Ký Mới",
-      barrierDismissible: false, // Bắt buộc chọn
+      barrierDismissible: false,
       content: Column(
         children: [
-          // Hiện ảnh đã crop
           ClipRRect(
             borderRadius: BorderRadius.circular(50),
             child: Image.memory(
-              Uint8List.fromList(faceBytes),
+              displayBytes, // Hiển thị ảnh JPG
               width: 120,
               height: 120,
               fit: BoxFit.cover,
@@ -454,54 +512,33 @@ class FaceRegisterController extends GetxController {
           ),
         ],
       ),
-      textConfirm: "Lưu dữ liệu",
+      textConfirm: "Lưu",
       textCancel: "Chụp lại",
       confirmTextColor: Colors.white,
       buttonColor: Colors.blue,
       onConfirm: () async {
         final name = nameController.text.trim();
-        // Validate dữ liệu
-        if (name.isEmpty) {
-          Get.snackbar(
-            "Lỗi",
-            "Tên không được để trống",
-            snackPosition: SnackPosition.BOTTOM,
-          );
-          return;
-        }
-        if (name.length < 2) {
-          Get.snackbar(
-            "Lỗi",
-            "Tên quá ngắn",
-            snackPosition: SnackPosition.BOTTOM,
-          );
+        if (name.isEmpty || name.length < 2) {
+          Get.snackbar("Lỗi", "Tên không hợp lệ");
           return;
         }
 
         Get.back(); // Đóng dialog
 
         try {
-          // Gọi Service Lưu
-          cv.Mat faceMat = cv.imdecode(
-            Uint8List.fromList(faceBytes),
-            cv.IMREAD_COLOR,
-          );
-          bool success = await _aiService.register(name, faceMat);
-          faceMat.dispose();
+          // Gọi Service Register (Input là List<double>)
+          bool success = await _aiService.register(name, aiPixels);
 
           if (success) {
             isRegistering.value = false;
-
             Get.snackbar(
               "Thành công",
-              "Đã thêm học sinh $name",
+              "Đã thêm: $name",
               backgroundColor: Colors.green,
               colorText: Colors.white,
             );
-            
             await Future.delayed(const Duration(milliseconds: 1500));
-            // Đóng màn hình đăng ký luôn sau khi xong
-            Get.back();
+            Get.back(); // Thoát màn hình
           } else {
             Get.snackbar("Lỗi", "Đăng ký thất bại");
             _resumeCamera();
@@ -512,7 +549,6 @@ class FaceRegisterController extends GetxController {
         }
       },
       onCancel: () {
-        // Nếu chọn Chụp lại -> Mở lại camera
         _resumeCamera();
       },
     );

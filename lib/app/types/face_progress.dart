@@ -1,18 +1,17 @@
-import 'package:flutter/material.dart';
+import 'dart:ffi'; // Để dùng Pointer, Void, Int32, Float, Uint8
+import 'dart:io';
+import 'package:flutter/foundation.dart';
+import 'package:ffi/ffi.dart';
 import 'package:flutter/services.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
-import 'package:opencv_dart/opencv_dart.dart' as cv;
 
-// --- DATA TRANSFER OBJECT (Gói dữ liệu để gửi đi) ---
 class FaceProcessRequest {
   final Uint8List yuvBytes;
   final int width;
   final int height;
   final Face face;
-  final int cropX, cropY, cropW, cropH;
   final int sensorOrientation;
   final bool isAndroid;
-  final String? debugPath;
   final RootIsolateToken? rootToken;
 
   FaceProcessRequest({
@@ -20,197 +19,212 @@ class FaceProcessRequest {
     required this.width,
     required this.height,
     required this.face,
-    required this.cropX,
-    required this.cropY,
-    required this.cropW,
-    required this.cropH,
     required this.sensorOrientation,
     required this.isAndroid,
-    this.debugPath,
-    this.rootToken,
+    required this.rootToken,
   });
 }
 
-// ĐIỂM CHUẨN (CANONICAL POINTS) CHO ARCFACE/INSIGHTFACE (112x112)
-// Thứ tự: Mắt trái, Mắt phải, Mũi, Miệng trái, Miệng phải
-final _refPoints = cv.VecPoint2f.fromList([
-  cv.Point2f(38.2946, 51.6963),
-  cv.Point2f(73.5318, 51.6963),
-  cv.Point2f(56.0252, 71.7366),
-  cv.Point2f(41.5493, 92.3655),
-  cv.Point2f(70.7299, 92.3655),
-]);
+// class FaceProcessorDart {
+//   /// Hàm chính xử lý tất cả: YUV -> RGB -> Rotate -> Align -> Normalize
+//   /// Trả về: List double sẵn sàng đưa vào Model
+//   static Future<List<double>?> process(FaceProcessRequest request) async {
+//     try {
+//       // 1. Convert YUV (NV21) sang Image (RGB)
+//       img.Image? image = convertNV21ToImage(
+//         request.yuvBytes,
+//         request.width,
+//         request.height,
+//       );
 
-/// Chuyển đổi YUV Bytes sang BGR Mat và xoay đúng chiều
-cv.Mat _convertToBGR(FaceProcessRequest request) {
-  // 1. Tạo Mat từ YUV Bytes
-  final matYUV = cv.Mat.fromList(
-    request.height + request.height ~/ 2, // Chiều cao NV21 = h * 1.5
-    request.width,
-    cv.MatType.CV_8UC1,
-    request.yuvBytes,
-  );
+//       // 2. Xoay ảnh theo Sensor (để mặt đứng thẳng)
+//       // Android thường bị xoay 90 hoặc 270 độ
+//       if (request.isAndroid && request.sensorOrientation != 0) {
+//         image = img.copyRotate(image, angle: request.sensorOrientation);
+//       }
 
-  // 2. Convert YUV -> BGR
-  final tempBGR = cv.cvtColor(matYUV, cv.COLOR_YUV2BGR_NV21);
-  matYUV.dispose(); // Xong việc xóa ngay
-
-  // 3. Xoay ảnh nếu cần (Dựa trên sensorOrientation)
-  cv.Mat finalBGR;
-  if (request.isAndroid && request.sensorOrientation != 0) {
-    switch (request.sensorOrientation) {
-      case 90:
-        finalBGR = cv.rotate(tempBGR, cv.ROTATE_90_CLOCKWISE);
-        break;
-      case 270:
-        finalBGR = cv.rotate(tempBGR, cv.ROTATE_90_COUNTERCLOCKWISE);
-        break;
-      case 180:
-        finalBGR = cv.rotate(tempBGR, cv.ROTATE_180);
-        break;
-      default:
-        finalBGR = tempBGR.clone();
-    }
-    tempBGR.dispose(); // Xóa ảnh tạm sau khi xoay
-  } else {
-    finalBGR = tempBGR; // Không xoay thì dùng luôn
-  }
-
-  return finalBGR;
-}
-
-/// Căn chỉnh khuôn mặt dùng Affine Transform
-cv.Mat? _alignFace(cv.Mat srcImg, Face face) {
-  // 1. Kiểm tra đủ landmark
-  final lm = face.landmarks;
-  if (lm[FaceLandmarkType.leftEye] == null ||
-      lm[FaceLandmarkType.rightEye] == null ||
-      lm[FaceLandmarkType.noseBase] == null ||
-      lm[FaceLandmarkType.leftMouth] == null ||
-      lm[FaceLandmarkType.rightMouth] == null) {
-    return null;
-  }
-
-  // 2. Lấy toạ độ
-  // Lưu ý: Logic sắp xếp trái phải của bạn rất cẩn thận, mình giữ nguyên
-  // để đề phòng trường hợp Mirror Camera.
-  var e1 = lm[FaceLandmarkType.leftEye]!.position;
-  var e2 = lm[FaceLandmarkType.rightEye]!.position;
-  var n = lm[FaceLandmarkType.noseBase]!.position;
-  var m1 = lm[FaceLandmarkType.leftMouth]!.position;
-  var m2 = lm[FaceLandmarkType.rightMouth]!.position;
-
-  final srcPoints = cv.VecPoint2f.fromList([
-    // Mắt trái (bên trái ảnh)
-    cv.Point2f(
-      (e1.x < e2.x ? e1 : e2).x.toDouble(),
-      (e1.x < e2.x ? e1 : e2).y.toDouble(),
-    ),
-    // Mắt phải
-    cv.Point2f(
-      (e1.x < e2.x ? e2 : e1).x.toDouble(),
-      (e1.x < e2.x ? e2 : e1).y.toDouble(),
-    ),
-    // Mũi
-    cv.Point2f(n.x.toDouble(), n.y.toDouble()),
-    // Miệng trái
-    cv.Point2f(
-      (m1.x < m2.x ? m1 : m2).x.toDouble(),
-      (m1.x < m2.x ? m1 : m2).y.toDouble(),
-    ),
-    // Miệng phải
-    cv.Point2f(
-      (m1.x < m2.x ? m2 : m1).x.toDouble(),
-      (m1.x < m2.x ? m2 : m1).y.toDouble(),
-    ),
-  ]);
-
-  // 3. Tính ma trận biến đổi (Estimate Affine)
-  // estimateAffinePartial2D tốt hơn getAffineTransform vì nó dùng cả 5 điểm để tối ưu hoá (Least Square)
-  final (transMat, _) = cv.estimateAffinePartial2D(srcPoints, _refPoints);
-
-  if (transMat.isEmpty) {
-    srcPoints.dispose();
-    return null;
-  }
-
-  // 4. Cắt và Kéo dãn (Warp)
-  final aligned = cv.warpAffine(
-    srcImg,
-    transMat,
-    (112, 112), // Kích thước đích chuẩn ArcFace
-    flags: cv.INTER_CUBIC, // Chất lượng ảnh tốt nhất
-  );
-
-  // Cleanup
-  srcPoints.dispose();
-  transMat.dispose();
-
-  return aligned;
-}
-
-// /// Hàm lưu ảnh debug (Chỉ chạy nếu có path)
-// void _saveDebugImage(cv.Mat img, String? basePath, String suffix) {
-//   if (basePath == null) return;
-//   try {
-//     final parentDir = File(basePath).parent.path;
-//     final path = '$parentDir/debug_$suffix';
-//     final (success, bytes) = cv.imencode(".jpg", img);
-//     if (success) {
-//       File(path).writeAsBytesSync(bytes);
-//       debugPrint("📸 Debug saved: $path");
+//       // 3. GỌI FACE ALIGNER
+//       return FaceAligner.alignFace(
+//         image,
+//         request.face,
+//         targetSize: 112,
+//         // saveDebug: true, // Có thể bật debug trong này nếu muốn check từng frame
+//         // debugName: "live_frame"
+//       );
+//     } catch (e) {
+//       debugPrint("❌ Error processing face: $e");
+//       return null;
 //     }
-//   } catch (_) {}
+//   }
+
+//   /// CHUYỂN ĐỔI NV21 (YUV) SANG RGB
+//   static img.Image convertNV21ToImage(Uint8List yuv, int width, int height) {
+//     final img.Image image = img.Image(width: width, height: height);
+//     final int frameSize = width * height;
+
+//     // Duyệt từng pixel
+//     for (int y = 0; y < height; y++) {
+//       for (int x = 0; x < width; x++) {
+//         int yIndex = y * width + x;
+
+//         // NV21 cấu trúc: Y plane full, sau đó là VU xen kẽ
+//         int uvIndex = frameSize + (y >> 1) * width + (x & ~1);
+
+//         int Y = yuv[yIndex] & 0xff;
+//         int V = yuv[uvIndex] & 0xff; // NV21 thì V nằm trước
+//         int U = yuv[uvIndex + 1] & 0xff; // Sau đó là U
+
+//         // Công thức YUV -> RGB
+//         int r = (Y + 1.402 * (V - 128)).toInt();
+//         int g = (Y - 0.344136 * (U - 128) - 0.714136 * (V - 128)).toInt();
+//         int b = (Y + 1.772 * (U - 128)).toInt();
+
+//         // Clamp về [0, 255]
+//         r = r.clamp(0, 255);
+//         g = g.clamp(0, 255);
+//         b = b.clamp(0, 255);
+
+//         // Set pixel vào Image
+//         image.setPixelRgb(x, y, r, g, b);
+//       }
+//     }
+//     return image;
+//   }
 // }
 
-// --- HÀM XỬ LÝ NỀN (CHẠY TRONG ISOLATE) ---
-Future<List<int>?> isolateFaceProcessor(FaceProcessRequest request) async {
+// Định nghĩa hàm C++
+typedef ProcessFaceAffineFunc =
+    Void Function(
+      Pointer<Uint8> yuvBytes,
+      Int32 width,
+      Int32 height,
+      Pointer<Float> landmarks, // Mảng 10 phần tử
+      Int32 rotation,
+      Pointer<Float> output,
+    );
+
+// Định nghĩa kiểu hàm Dart
+typedef ProcessFaceAffineDart =
+    void Function(
+      Pointer<Uint8> yuvBytes,
+      int width,
+      int height,
+      Pointer<Float> landmarks,
+      int rotation,
+      Pointer<Float> output,
+    );
+
+class FaceProcessorNative {
+  static DynamicLibrary? _lib;
+  static ProcessFaceAffineDart? _func;
+
+  static void init() {
+    if (_lib != null) return;
+    // Tên thư viện phải khớp với CMakeLists (native_face)
+    final libName = Platform.isAndroid
+        ? 'libnative_face_align.so'
+        : 'native_face_align.framework/native_face_align';
+    try {
+      _lib = DynamicLibrary.open(libName);
+
+      _func = _lib!
+          .lookup<NativeFunction<ProcessFaceAffineFunc>>('process_face_affine')
+          .asFunction();
+      debugPrint("✅ Đã load thư viện C++ thành công: $libName");
+    } catch (e) {
+      debugPrint("❌ Lỗi load thư viện C++: $e");
+    }
+  }
+
+  static List<double>? process(
+    Uint8List yuvBytes,
+    int width,
+    int height,
+    Face face,
+    int rotation,
+  ) {
+    if (_func == null) init();
+    if (_func == null) return null;
+
+    // 1. Trích xuất Landmarks (5 điểm)
+    // Map từ ML Kit Face -> Flat Array
+    final lm = face.landmarks;
+    final leftEye = lm[FaceLandmarkType.leftEye]?.position;
+    final rightEye = lm[FaceLandmarkType.rightEye]?.position;
+    final nose = lm[FaceLandmarkType.noseBase]?.position;
+    final leftMouth = lm[FaceLandmarkType.leftMouth]?.position;
+    final rightMouth = lm[FaceLandmarkType.rightMouth]?.position;
+
+    // Nếu thiếu điểm quan trọng -> Return null
+    if (leftEye == null || rightEye == null) return null;
+
+    // Tạo mảng Landmarks cho C++ (10 số float)
+    final Pointer<Float> ptrLandmarks = calloc<Float>(10);
+    final listLm = ptrLandmarks.asTypedList(10);
+
+    // Gán dữ liệu (X, Y)
+    listLm[0] = leftEye.x.toDouble();
+    listLm[1] = leftEye.y.toDouble();
+    listLm[2] = rightEye.x.toDouble();
+    listLm[3] = rightEye.y.toDouble();
+    // Các điểm còn lại nếu C++ cần dùng (hiện tại code C++ trên chỉ dùng 2 mắt)
+    // Nhưng cứ truyền đủ cho đúng cấu trúc
+    if (nose != null) {
+      listLm[4] = nose.x.toDouble();
+      listLm[5] = nose.y.toDouble();
+    }
+    if (leftMouth != null) {
+      listLm[6] = leftMouth.x.toDouble();
+      listLm[7] = leftMouth.y.toDouble();
+    }
+    if (rightMouth != null) {
+      listLm[8] = rightMouth.x.toDouble();
+      listLm[9] = rightMouth.y.toDouble();
+    }
+
+    // 2. Cấp phát bộ nhớ cho YUV (Copy dữ liệu ảnh sang C++)
+    final Pointer<Uint8> ptrYuv = calloc<Uint8>(yuvBytes.length);
+    ptrYuv.asTypedList(yuvBytes.length).setAll(0, yuvBytes);
+
+    // 3. Chuẩn bị Output
+    final int outLen = 112 * 112 * 3;
+    final Pointer<Float> ptrOut = calloc<Float>(outLen);
+
+    try {
+      // 4. 🔥 GỌI C++
+      _func!(ptrYuv, width, height, ptrLandmarks, rotation, ptrOut);
+
+      // 5. Lấy kết quả
+      final Float32List result = ptrOut.asTypedList(outLen);
+      return List<double>.from(result);
+    } catch (e) {
+      debugPrint("Native Error: $e");
+      return null;
+    } finally {
+      calloc.free(ptrYuv);
+      calloc.free(ptrLandmarks);
+      calloc.free(ptrOut);
+    }
+  }
+}
+
+Future<List<double>?> isolateFaceProcessor(FaceProcessRequest request) async {
+  // 1. Khởi tạo môi trường cho Isolate (Bắt buộc để dùng các platform channel nếu cần)
   if (request.rootToken != null) {
     BackgroundIsolateBinaryMessenger.ensureInitialized(request.rootToken!);
   }
 
-  // Khai báo biến ở ngoài để đảm bảo dispose trong finally
-  cv.Mat? matBGR;
-  cv.Mat? alignedFace;
-  // cv.Mat? matGray;
-
   try {
-    final face = request.face;
-
-    // --- GATE 1: CHECK GÓC MẶT ---
-    if ((face.headEulerAngleY ?? 0).abs() > 15 ||
-        (face.headEulerAngleZ ?? 0).abs() > 15) {
-      // debugPrint("⚠️ Mặt nghiêng quá, bỏ qua để đảm bảo chính xác");
-      return null;
-    }
-
-    // --- BƯỚC 1: CONVERT & XOAY ẢNH ---
-    matBGR = _convertToBGR(request);
-
-    // // Debug ảnh gốc (Optional)
-    // _saveDebugImage(matBGR, request.debugPath, "01_rotated.jpg");
-
-    // --- BƯỚC 2: CĂN CHỈNH (ALIGNMENT) ---
-    alignedFace = _alignFace(matBGR, face);
-
-    if (alignedFace == null || alignedFace.isEmpty) {
-      return null;
-    }
-
-    // // Debug ảnh kết quả (Optional)
-    // _saveDebugImage(alignedFace, request.debugPath, "02_aligned.jpg");
-
-    final (success, encodedBytes) = cv.imencode(".jpg", alignedFace);
-    if (success) {
-      return encodedBytes.toList(); // Trả về file JPG hoàn chỉnh
-    } else {
-      return null;
-    }
+    // YUV -> RGB -> Rotate -> Crop -> Resize -> Normalize
+    return FaceProcessorNative.process(
+      request.yuvBytes,
+      request.width,
+      request.height,
+      request.face, // Truyền thẳng object Face
+      request.sensorOrientation,
+    );
   } catch (e) {
-    debugPrint("Isolate Error: $e");
+    debugPrint("❌ Isolate Error: $e");
     return null;
-  } finally {
-    matBGR?.dispose();
-    alignedFace?.dispose();
   }
 }

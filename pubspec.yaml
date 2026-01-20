@@ -2,7 +2,7 @@ name: face_attendance
 description: "A new Flutter project."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
-publish_to: 'none' # Remove this line if you wish to publish to pub.dev
+publish_to: "none" # Remove this line if you wish to publish to pub.dev
 
 # The following defines the version and build number for your application.
 # A version number is three numbers separated by dots, like 1.2.43
@@ -31,28 +31,19 @@ dependencies:
   flutter:
     sdk: flutter
 
-  # The following adds the Cupertino Icons font to your application.
-  # Use with the CupertinoIcons class for iOS style icons.
-  cupertino_icons: ^1.0.8
   get: ^4.7.3
   camera: ^0.11.3
-  # image: ^4.5.4
-  # sqflite: ^2.4.2
+  image: ^4.5.4
   path: ^1.9.1
-  dio: ^5.9.0
+  # dio: ^5.9.0
+  ffi: ^2.1.0
   path_provider: ^2.1.5
   permission_handler: ^12.0.1
   google_mlkit_face_detection: ^0.13.1
-  # universal_html: ^2.2.4
   tflite_flutter: ^0.11.0
-  # image_picker: ^1.2.1
-  hive: ^2.2.3
   hive_flutter: ^1.1.0
-  # http: ^1.2.0
-  archive: ^4.0.7
+  # archive: ^4.0.7
   flutter_image_compress: ^2.3.0
-  ffi: ^2.1.4
-  opencv_dart: ^1.0.0
 
 dev_dependencies:
   flutter_test:
@@ -70,7 +61,6 @@ dev_dependencies:
 
 # The following section is specific to Flutter packages.
 flutter:
-
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in
   # the material Icons class.
@@ -78,11 +68,14 @@ flutter:
 
   # Thêm đoạn này vào (Chú ý thụt đầu dòng thẳng hàng với uses-material-design)
   assets:
-    - assets/models/
-    - assets/dataset.zip
-    - assets/db_MobileFaceNet_testing_2_tflite.json
+    - assets/models/mobilefacenet.tflite
+    # - assets/models/MobileFaceNet_testing_2.tflite
+    # - assets/models/w600k_mbf_float32.tflite
+    # - assets/models/output_model_test.tflite
+    # - assets/dataset.zip
     - assets/db_mobilefacenet_tflite.json
-    - assets/db_w600k_mbf_float32_tflite.json
+    # - assets/db_MobileFaceNet_testing_2_tflite.json
+    # - assets/db_w600k_mbf_float32_tflite.json
 
   # To add assets to your application, add an assets section, like this:
   # assets:

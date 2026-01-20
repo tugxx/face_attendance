@@ -1,1 +1,20 @@
-{"model_info":{"name":"w600k_mbf_float32.tflite","input_height":112,"input_width":112,"channels":3,"output_dim":512,"file_size_mb":6.53},"performance":{"total_images":17,"total_time_ms":11585,"avg_ms_per_image":681.5},"quality_metrics":{"avg_intra_sim":0.6862,"avg_inter_sim":0.0797,"quality_margin":0.6065}}
+{
+    "model_info": {
+        "name": "w600k_mbf_float32.tflite",
+        "input_height": 112,
+        "input_width": 112,
+        "channels": 3,
+        "output_dim": 512,
+        "file_size_mb": 6.53
+    },
+    "performance": {
+        "total_images": 17,
+        "total_time_ms": 13252,
+        "avg_ms_per_image": 779.5
+    },
+    "quality_metrics": {
+        "avg_intra_sim": 0.6805,
+        "avg_inter_sim": 0.0838,
+        "quality_margin": 0.5967
+    }
+}

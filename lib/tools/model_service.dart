@@ -2,7 +2,6 @@ import 'dart:typed_data';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:opencv_dart/opencv_dart.dart' as cv;
 import 'package:tflite_flutter/tflite_flutter.dart';
 
 class ToolAIService {
@@ -111,121 +110,107 @@ class ToolAIService {
     }
   }
 
-  List<double> generateEmbedding(cv.Mat alignedMat) {
+  Future<List<double>> generateEmbedding(List<double> inputPixels) async {
     if (_interpreter == null) {
       debugPrint("⚠️ Model chưa init!");
       return [];
     }
 
-    // 1. Convert BGR -> RGB & Resize
-    cv.Mat rgbMat = cv.cvtColor(alignedMat, cv.COLOR_BGR2RGB);
-    if (rgbMat.rows != _inputHeight || rgbMat.cols != _inputWidth) {
-      cv.Mat resizedMat = cv.resize(rgbMat, (_inputWidth, _inputHeight));
-      rgbMat.dispose(); // Giải phóng ảnh cũ ngay lập tức
-      rgbMat = resizedMat;
+    // Guard: Kiểm tra kích thước dữ liệu đầu vào có khớp không
+    if (inputPixels.length != _inputHeight * _inputWidth * _channels) {
+      debugPrint(
+        "⚠️ Sai kích thước input! Nhận ${inputPixels.length}, cần ${_inputHeight * _inputWidth * _channels}",
+      );
+      return [];
     }
 
-    Object inputBuffer;
-    cv.Mat? processedMat;
-
     try {
-      // 2. CHUẨN BỊ INPUT DATA DỰA TRÊN TYPE
+      // 1. CHUẨN BỊ INPUT BUFFER
+      Object inputBuffer;
+
       if (_inputType == TensorType.float32) {
-        // --- TRƯỜNG HỢP FLOAT32 ---
-        processedMat = rgbMat.convertTo(
-          cv.MatType.CV_32FC3,
-          alpha: normAlpha, // 1/128
-          beta: normBeta, // -127.5/128
-        );
-
-        // Zero-copy: Ánh xạ bộ nhớ trực tiếp
-        final byteData = processedMat.data;
-        final inputFloatList = Float32List.view(
-          byteData.buffer,
-          byteData.offsetInBytes,
-          byteData.lengthInBytes ~/ 4,
-        );
-
+        // --- TRƯỜNG HỢP FLOAT32 (Phổ biến nhất) ---
+        // inputPixels đã là double [-1, 1], chỉ cần cast sang Float32List và Reshape
         inputBuffer = Float32List.fromList(
-          inputFloatList,
+          inputPixels,
         ).reshape([1, _inputHeight, _inputWidth, _channels]);
       } else {
-        // --- TRƯỜNG HỢP INT8 / UINT8 ---
-        double qAlpha = 1.0 / (128.0 * _scale);
-        double qBeta = _zeroPoint - (127.5 / (128.0 * _scale));
+        // --- TRƯỜNG HỢP INT8 / UINT8 (Quantized Model) ---
+        // Ta cần chuyển đổi từ Float [-1, 1] sang Int/Uint dựa trên Scale & ZeroPoint
+        // Công thức: q = x / scale + zeroPoint
 
-        // Chọn kiểu dữ liệu đích
-        var targetType = (_inputType == TensorType.int8)
-            ? cv.MatType.CV_8SC3
-            : cv.MatType.CV_8UC3;
+        List<int> quantizedData = inputPixels.map((x) {
+          double q = (x / _scale) + _zeroPoint;
+          if (_inputType == TensorType.uint8) {
+            return q.round().clamp(0, 255);
+          } else {
+            return q.round().clamp(-128, 127);
+          }
+        }).toList();
 
-        processedMat = rgbMat.convertTo(targetType, alpha: qAlpha, beta: qBeta);
-
-        // Lấy raw bytes từ ảnh RGB (đang là uint8: 0-255)
-        Uint8List rawBytes = processedMat.data;
-
-        // Reshape & Cast đúng kiểu
-        if (_inputType == TensorType.int8) {
-          // Int8List view trên bộ nhớ raw
-          inputBuffer = Int8List.view(
-            rawBytes.buffer,
-          ).reshape([1, _inputHeight, _inputWidth, 3]);
+        if (_inputType == TensorType.uint8) {
+          inputBuffer = Uint8List.fromList(
+            quantizedData,
+          ).reshape([1, _inputHeight, _inputWidth, _channels]);
         } else {
-          // Uint8List
-          inputBuffer = rawBytes.reshape([1, _inputHeight, _inputWidth, 3]);
+          inputBuffer = Int8List.fromList(
+            quantizedData,
+          ).reshape([1, _inputHeight, _inputWidth, _channels]);
         }
       }
 
-      // 3. CHUẨN BỊ OUTPUT & RUN
-      // Lưu ý: Output của model Face Recognition thường luôn là Float32 (Embedding vector)
-      // ngay cả khi input là Int8. Nếu model trả về Int8, ta phải Dequantize.
-
+      // 2. CHUẨN BỊ OUTPUT BUFFER
       var outputTensor = _interpreter!.getOutputTensor(0);
-      var outputShape = outputTensor.shape;
-
       Object outputBufferRaw;
+
+      // Luôn hứng output theo đúng kiểu dữ liệu của Model
       if (outputTensor.type == TensorType.float32) {
-        outputBufferRaw = Float32List(_outputSize).reshape(outputShape);
+        outputBufferRaw = Float32List(_outputSize).reshape(outputTensor.shape);
       } else {
-        // Int8/Uint8
-        outputBufferRaw = List.filled(_outputSize, 0).reshape(outputShape);
+        // Nếu output là int8/uint8
+        outputBufferRaw = List.filled(
+          _outputSize,
+          0.0,
+        ).reshape(outputTensor.shape); // Dart List dynamic cho an toàn
       }
 
+      // 3. CHẠY MODEL (Inference)
       _interpreter!.run(inputBuffer, outputBufferRaw);
 
-      // 6. XỬ LÝ KẾT QUẢ
+      // 4. XỬ LÝ KẾT QUẢ (Parsing Output)
       List<double> rawEmbedding = [];
-
-      // Lấy data từ buffer ra (dù shape là [1,128] hay [128] thì flatten đều ra list)
       var batchResult = outputBufferRaw as List;
+      var firstVector = batchResult[0]; // Batch 0
 
-      // Lấy vector của bức ảnh đầu tiên (Batch size = 1 nên lấy index 0)
-      var firstVector = batchResult[0] as List;
-
-      if (outputTensor.type == TensorType.float32) {
-        // Nếu output model là Float, chỉ cần copy sang List<double>
-        // Dùng map để đảm bảo chuyển đổi đúng kiểu số
-        rawEmbedding = firstVector.map((e) => (e as num).toDouble()).toList();
+      // Flatten kết quả ra List<double>
+      if (firstVector is List) {
+        // Output dạng [1, 192]
+        for (var item in firstVector) {
+          rawEmbedding.add(_parseOutputValue(item, outputTensor));
+        }
       } else {
-        // Nếu output model là Int8/Uint8, phải Dequantize
-        // Công thức: f = (q - zero_point) * scale
-        double outScale = outputTensor.params.scale;
-        int outZeroPoint = outputTensor.params.zeroPoint;
-
-        for (var element in firstVector) {
-          num val = element as num; // Ép về num cho an toàn
-          rawEmbedding.add((val - outZeroPoint) * outScale);
+        // Output dạng [192] (Flatten sẵn)
+        for (var item in batchResult) {
+          rawEmbedding.add(_parseOutputValue(item, outputTensor));
         }
       }
 
+      // 5. L2 NORMALIZE (Bắt buộc)
       return _l2Normalize(rawEmbedding);
     } catch (e) {
       debugPrint("❌ Error in generateEmbedding: $e");
       return [];
-    } finally {
-      // Dọn dẹp bộ nhớ Native C++ (Rất quan trọng để không leak RAM)
-      rgbMat.dispose();
-      processedMat?.dispose();
+    }
+  }
+
+  double _parseOutputValue(dynamic value, Tensor outputTensor) {
+    if (outputTensor.type == TensorType.float32) {
+      return (value as num).toDouble();
+    } else {
+      // Dequantize: f = (q - zeroPoint) * scale
+      double scale = outputTensor.params.scale;
+      int zeroPoint = outputTensor.params.zeroPoint;
+      return ((value as num) - zeroPoint) * scale;
     }
   }
 
