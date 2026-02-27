@@ -255,87 +255,8 @@ extern "C" __attribute__((visibility("default"))) __attribute__((used)) {
     stbi_image_free(imgData);
   }
 
-  // // Hàm lấy pixel thô sử dụng Stride để chính xác tuyệt đối
-  // inline int get_pixel_raw(uint8_t * yuv, int width, int height, int yStride,
-  //                          int uvStride, int x, int y) {
-  //   // if (x < 0)
-  //   //   x = 0;
-  //   // if (x >= width)
-  //   //   x = width - 1;
-  //   // if (y < 0)
-  //   //   y = 0;
-  //   // if (y >= height)
-  //   //   y = height - 1;
-
-  //   if (x < 0 || x >= width || y < 0 || y >= height) {
-  //     return 0; // Black pixel
-  //   }
-
-  //   int yIdx = y * yStride + x;
-  //   int Y_val = yuv[yIdx] & 0xFF;
-
-  //   int uvStart = yStride * height;
-  //   int uvIdx = uvStart + (y >> 1) * uvStride + (x & ~1);
-
-  //   int V_val = yuv[uvIdx] & 0xFF;
-  //   int U_val = yuv[uvIdx + 1] & 0xFF;
-
-  //   int c = Y_val - 16;
-  //   int d = U_val - 128;
-  //   int e = V_val - 128;
-
-  //   int r = (298 * c + 409 * e + 128) >> 8;
-  //   int g = (298 * c - 100 * d - 208 * e + 128) >> 8;
-  //   int b = (298 * c + 516 * d + 128) >> 8;
-
-  //   return (clamp(r) << 16) | (clamp(g) << 8) | clamp(b);
-  // }
-
-  // // Hàm nội suy tuyến tính (Bilinear) để khử răng cưa
-  // int get_pixel_bilinear(uint8_t * yuv, int width, int height, int yStride,
-  //                        int uvStride, float lx, float ly, int rotation) {
-  //   float srcX, srcY;
-  //   if (rotation == 270) {
-  //     srcX = width - 1 - ly;
-  //     srcY = lx;
-  //   } else if (rotation == 90) {
-  //     srcX = ly;
-  //     srcY = height - 1 - lx;
-  //   } else {
-  //     srcX = lx;
-  //     srcY = ly;
-  //   }
-
-  //   int x1 = (int)floor(srcX);
-  //   int y1 = (int)floor(srcY);
-  //   int x2 = (x1 + 1 < width) ? x1 + 1 : x1;
-  //   int y2 = (y1 + 1 < height) ? y1 + 1 : y1;
-
-  //   float dx = srcX - x1;
-  //   float dy = srcY - y1;
-
-  //   int p11 = get_pixel_raw(yuv, width, height, yStride, uvStride, x1, y1);
-  //   int p21 = get_pixel_raw(yuv, width, height, yStride, uvStride, x2, y1);
-  //   int p12 = get_pixel_raw(yuv, width, height, yStride, uvStride, x1, y2);
-  //   int p22 = get_pixel_raw(yuv, width, height, yStride, uvStride, x2, y2);
-
-  //   auto interp = [&](int c11, int c21, int c12, int c22) {
-  //     return (int)((1 - dx) * (1 - dy) * c11 + dx * (1 - dy) * c21 +
-  //                  (1 - dx) * dy * c12 + dx * dy * c22);
-  //   };
-
-  //   int r = interp((p11 >> 16) & 0xFF, (p21 >> 16) & 0xFF, (p12 >> 16) &
-  //   0xFF,
-  //                  (p22 >> 16) & 0xFF);
-  //   int g = interp((p11 >> 8) & 0xFF, (p21 >> 8) & 0xFF, (p12 >> 8) & 0xFF,
-  //                  (p22 >> 8) & 0xFF);
-  //   int b = interp(p11 & 0xFF, p21 & 0xFF, p12 & 0xFF, p22 & 0xFF);
-
-  //   return (clamp(r) << 16) | (clamp(g) << 8) | clamp(b);
-  // }
-
   // Helper: Kẹp giá trị trong khoảng [min, max]
-  inline float clamp_test(float v, float min_v, float max_v) {
+  inline float clamp_v2(float v, float min_v, float max_v) {
     return std::max(min_v, std::min(v, max_v));
   }
 
@@ -379,19 +300,18 @@ extern "C" __attribute__((visibility("default"))) __attribute__((used)) {
     float u_f = (float)U_val - 128.0f;
     float v_f = (float)V_val - 128.0f;
 
-    *r = (uint8_t)clamp_test(y_f + 1.370705f * v_f, 0.0f, 255.0f);
-    *g = (uint8_t)clamp_test(y_f - 0.337633f * u_f - 0.698001f * v_f, 0.0f,
-                             255.0f);
-    *b = (uint8_t)clamp_test(y_f + 1.732446f * u_f, 0.0f, 255.0f);
+    *r = (uint8_t)clamp_v2(y_f + 1.370705f * v_f, 0.0f, 255.0f);
+    *g = (uint8_t)clamp_v2(y_f - 0.337633f * u_f - 0.698001f * v_f, 0.0f,
+                           255.0f);
+    *b = (uint8_t)clamp_v2(y_f + 1.732446f * u_f, 0.0f, 255.0f);
   }
 
   // --------------------------------------------------------
-  // HÀM XỬ LÝ ANTI-SPOOFING (Scale 2.7 -> Crop 80x80)
+  // HÀM XỬ LÝ ANTI-SPOOFING (Scale -> Crop 80x80)
   // --------------------------------------------------------
   void process_face_crop(uint8_t * yuvPtr, int width, int height, int yStride,
-                         int uvStride, float *landmarks, int landmark_count,
                          int rotation, int rX, int rY, int rW, int rH,
-                         int target_width, int target_height, int model_type,
+                         int target_width, int target_height,
                          float *outputBuffer) {
     int logical_w = width;
     int logical_h = height;
@@ -403,9 +323,6 @@ extern "C" __attribute__((visibility("default"))) __attribute__((used)) {
     // --- BƯỚC 1: TÍNH TOÁN VÙNG CROP (SQUARE + SCALE) ---
     float cx = rX + rW / 2.0f;
     float cy = rY + rH / 2.0f;
-
-    // float shift_y_ratio = 0.8f;
-    // cy = cy - (rH * shift_y_ratio);
 
     // Scale
     float scale = 1.0f;
@@ -434,7 +351,7 @@ extern "C" __attribute__((visibility("default"))) __attribute__((used)) {
 
     // --- BƯỚC 2: EXTRACT (CẮT ẢNH) ---
     // Tạo buffer tạm để chứa ảnh RGB cắt từ camera (kích thước gốc crop_size x
-    // crop_size) Tương đương: face_img = frame[y:y+h, x:x+w]
+    // crop_size)
     std::vector<uint8_t> raw_crop_rgb(real_crop_w * real_crop_h * 3);
 
     int idx = 0;
@@ -455,7 +372,6 @@ extern "C" __attribute__((visibility("default"))) __attribute__((used)) {
     }
 
     // --- BƯỚC 3: RESIZE (DÙNG THƯ VIỆN STB) ---
-    // Tương đương: resized_img = cv2.resize(face_img, (224, 224))
     std::vector<uint8_t> resized_rgb(target_width * target_height * 3);
 
     // stbir_resize_uint8(input_data, input_w, input_h, input_stride,
@@ -468,26 +384,6 @@ extern "C" __attribute__((visibility("default"))) __attribute__((used)) {
     // float norm_mean[] = {0.485f, 0.456f, 0.406f};
     // float norm_std[] = {0.229f, 0.224f, 0.225f};
 
-    // int pIdx = 0;
-    // int rIdx = 0;
-
-    // for (int i = 0; i < target_width * target_height; i++) {
-    //   uint8_t r_byte = resized_rgb[rIdx++];
-    //   uint8_t g_byte = resized_rgb[rIdx++];
-    //   uint8_t b_byte = resized_rgb[rIdx++];
-
-    //   // uint8_t tmp = r_byte;
-    //   // r_byte = b_byte;
-    //   // b_byte = tmp; // Swap R <-> B for BGR
-
-    //   outputBuffer[pIdx++] =
-    //       ((r_byte / 255.0f) - norm_mean[0]) / norm_std[0]; // R
-    //   outputBuffer[pIdx++] =
-    //       ((g_byte / 255.0f) - norm_mean[1]) / norm_std[1]; // G
-    //   outputBuffer[pIdx++] =
-    //       ((b_byte / 255.0f) - norm_mean[2]) / norm_std[2]; // B
-    // }
-
     int pIdx = 0;
     int rIdx = 0;
 
@@ -497,51 +393,14 @@ extern "C" __attribute__((visibility("default"))) __attribute__((used)) {
       uint8_t g_byte = resized_rgb[rIdx++];
       uint8_t b_byte = resized_rgb[rIdx++];
 
+      // uint8_t tmp = r_byte;
+      // r_byte = b_byte;
+      // b_byte = tmp; // Swap R <-> B for BGR
+
       // Ghi tuần tự vào outputBuffer theo thứ tự B, G, R
-      outputBuffer[pIdx++] = (float)b_byte; 
-      outputBuffer[pIdx++] = (float)g_byte; 
-      outputBuffer[pIdx++] = (float)r_byte; 
+      outputBuffer[pIdx++] = (float)b_byte;
+      outputBuffer[pIdx++] = (float)g_byte;
+      outputBuffer[pIdx++] = (float)r_byte;
     }
-
-    /* // LỰA CHỌN 2: Dành cho Input TFLite shape [1, 3, 128, 128] (CHW - Gốc
-    của PyTorch)
-    // NẾU Dart báo lỗi Shape Mismatch, bác comment Lựa chọn 1 lại và dùng khối
-    này: int channel_size = target_width * target_height; for (int i = 0; i <
-    total_pixels; i++) { float r = resized_rgb[i * 3 + 0] / 255.0f; float g =
-    resized_rgb[i * 3 + 1] / 255.0f; float b = resized_rgb[i * 3 + 2] / 255.0f;
-
-      outputBuffer[i]                  = (r - norm_mean[0]) / norm_std[0];
-      outputBuffer[i + channel_size]   = (g - norm_mean[1]) / norm_std[1];
-      outputBuffer[i + 2*channel_size] = (b - norm_mean[2]) / norm_std[2];
-    }
-    */
-
-    // for (int y = 0; y < target_height; y++) {
-    //   float srcY = start_y + y * step;
-    //   for (int x = 0; x < target_width; x++) {
-    //     float srcX = start_x + x * step;
-
-    //     // Tách màu và đưa về [0, 1]
-    //     float r = ((rgb >> 16) & 0xFF) / 255.0f;
-    //     float g = ((rgb >> 8) & 0xFF) / 255.0f;
-    //     float b = (rgb & 0xFF) / 255.0f;
-
-    //     // Kênh 0: Blue
-    //     outputBuffer[pIdx++] = (b - norm_mean[0]) / norm_std[0];
-
-    //     // Kênh 1: Green
-    //     outputBuffer[pIdx++] = (g - norm_mean[1]) / norm_std[1];
-
-    //     // Kênh 2: Red
-    //     outputBuffer[pIdx++] = (r - norm_mean[2]) / norm_std[2];
-
-    //     // } else {
-    //     //   // MiniFASNet để nguyên 0..1 hoặc 0..255
-    //     //   outputBuffer[pIdx++] = r;
-    //     //   outputBuffer[pIdx++] = g;
-    //     //   outputBuffer[pIdx++] = b;
-    //     // }
-    //   }
-    // }
   }
 }

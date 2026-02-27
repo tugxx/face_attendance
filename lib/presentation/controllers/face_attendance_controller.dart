@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:ffi';
+import 'dart:math' as math;
 
 import 'package:ffi/ffi.dart';
 import 'package:camera/camera.dart';
@@ -7,13 +8,14 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:path_provider/path_provider.dart';
+// import 'package:path_provider/path_provider.dart';
 
 import '../../app/utils/camera_utils.dart';
 import '../../app/services/face_recognition_service.dart';
 import '../../app/services/face_isolate_service.dart';
 import '../../app/services/face_antispoofing_service.dart';
 import '../../app/services/face_smoothier_service.dart';
+import '../../app/services/log_service.dart';
 
 class FaceCheckinState {
   // Biến cấu hình
@@ -58,6 +60,8 @@ class FaceAttendanceController extends GetxController {
   var detectedFaces = <Face>[].obs;
   CameraDescription? _currentCamera;
 
+  var faceInstruction = "".obs;
+
   // ------------------------------------------------------
   // HELPER
   // ------------------------------------------------------
@@ -97,6 +101,26 @@ class FaceAttendanceController extends GetxController {
       return null;
     }
 
+    // Lọc khuôn mặt quá to (Gần camera)
+    // Lấy kích thước khung hình từ metadata của ML Kit (đã xử lý xoay chuẩn xác)
+    final imageSize = inputImage.metadata?.size;
+    if (imageSize != null) {
+      final actualWidth = math.min(imageSize.width, imageSize.height);
+
+      final widthRatio = face.boundingBox.width / actualWidth;
+
+      // Ngưỡng 0.95: Mặt chiếm > 95% chiều ngang màn hình -> Quá gần
+      if (widthRatio > 0.95) {
+        AppLog.warning(
+          "Khuôn mặt quá gần camera! Tỷ lệ ngang: ${(widthRatio * 100).toInt()}%",
+        );
+        faceInstruction.value = "⚠️ Quá gần! Vui lòng lùi ra xa";
+        return null;
+      }
+
+      faceInstruction.value = "";
+    }
+
     return face;
   }
 
@@ -113,20 +137,20 @@ class FaceAttendanceController extends GetxController {
   //       final String path = '${dir.path}/debug_face.jpg';
 
   //       // 2. In đường dẫn ra console để debug
-  //       debugPrint("💾 File path: $path");
+  //       AppLog.info("💾 File path: $path");
 
   //       return path;
   //     }
   //   } catch (e) {
-  //     debugPrint("⚠️ Lỗi tạo đường dẫn: $e");
+  //     AppLog.warning("⚠️ Lỗi tạo đường dẫn: $e");
   //   }
   //   return null;
   // }
 
   Future<void> _performRecognition(
     List<double> recogPixels, // 112x112
-    List<double> spoofPixels, // 80x80 (224x224)
-    Stopwatch sw,
+    List<double> spoofPixels, // 80x80
+    // Stopwatch sw,
   ) async {
     if (checkinState.isSuccessCooldown) {
       isProcessing.value = false;
@@ -134,7 +158,7 @@ class FaceAttendanceController extends GetxController {
     }
 
     if (recogPixels.isEmpty) {
-      debugPrint("⚠️ Lỗi: Dữ liệu khuôn mặt rỗng!");
+      AppLog.warning("⚠️ Lỗi: Dữ liệu khuôn mặt rỗng!");
       isProcessing.value = false;
       return;
     }
@@ -143,10 +167,7 @@ class FaceAttendanceController extends GetxController {
 
     try {
       // ---------------------------------------------------------
-      // TỐI ƯU 1: CHẠY SONG SONG (Parallel Execution)
-      // Thay vì await từng cái, ta bắn cả 2 model cùng lúc
-      // (Lưu ý: Tùy vào device, đôi khi chạy tuần tự nhanh hơn nếu GPU bị lock,
-      // nhưng về mặt logic luồng thì code này gọn hơn).
+      // CHẠY SONG SONG (Parallel Execution)
       // ---------------------------------------------------------
 
       // Gọi nhận diện danh tính
@@ -158,12 +179,12 @@ class FaceAttendanceController extends GetxController {
       // Chờ cả 2 kết quả trả về
       final results = await Future.wait([futureIdentity, futureLiveness]);
 
-      futureIdentity.then((recognition) {
-        debugPrint("Độ similarity: ${recognition.distance}");
-      });
+      // futureIdentity.then((recognition) {
+      //   AppLog.info("Độ similarity: ${recognition.distance}");
+      // });
 
       // int tEndAI = sw.elapsedMilliseconds;
-      // debugPrint("3️⃣ AI Inference (2 Models): ${tEndAI - tStartAI} ms");
+      // AppLog.info("3️⃣ AI Inference (2 Models): ${tEndAI - tStartAI} ms");
 
       final RecognitionResult idResult = results[0] as RecognitionResult;
       final bool isRealPerson = results[1] as bool;
@@ -171,7 +192,7 @@ class FaceAttendanceController extends GetxController {
       String detectedName = idResult.isUnknown ? "Unknown" : idResult.name;
 
       // ---------------------------------------------------------
-      // TỐI ƯU 2: GỘP LOGIC (Combined Logic)
+      // GỘP LOGIC (Combined Logic)
       // Điều kiện: Phải ĐÚNG NGƯỜI và PHẢI LÀ NGƯỜI THẬT cùng lúc
       // ---------------------------------------------------------
 
@@ -186,12 +207,10 @@ class FaceAttendanceController extends GetxController {
           // Đổi người -> Reset
           checkinState.currentCandidate = detectedName;
           checkinState.matchStreak = 1;
-          debugPrint("🔄 Tracking new: $detectedName");
+          AppLog.info("🔄 Tracking new: $detectedName");
         }
 
-        // TỐI ƯU 3: BỎ UI NẶNG (Get.snackbar)
-        // Chỉ in log hoặc update biến nhẹ nhàng để UI tự build lại (dùng Obx/ValueListenable)
-        debugPrint(
+        AppLog.info(
           "🚀 Verified: $detectedName | Progress: ${checkinState.matchStreak}/3",
         );
 
@@ -203,16 +222,16 @@ class FaceAttendanceController extends GetxController {
       } else {
         // A. NẾU LÀ GIẢ MẠO (Spoof)
         if (!isRealPerson) {
-          debugPrint("⚠️ SPOOF DETECTED for $detectedName");
-          errorMsg.value = "⚠️ Cảnh báo: Phát hiện giả mạo!";
+          AppLog.warning("⚠️ SPOOF DETECTED for $detectedName");
+          // errorMsg.value = "⚠️ Cảnh báo: Phát hiện giả mạo!";
           return; // Dừng xử lý frame này
         }
 
-        // B. NẾU LÀ NGƯỜI THẬT NHƯNG KHÔNG NHẬN RA (Unknown)
-        // Hoặc frame này bình thường trở lại -> Xóa lỗi "Giả mạo" đi
-        if (errorMsg.value.contains("giả mạo")) {
-          errorMsg.value = ""; // ✅ Reset về trạng thái bình thường
-        }
+        // // B. NẾU LÀ NGƯỜI THẬT NHƯNG KHÔNG NHẬN RA (Unknown)
+        // // Hoặc frame này bình thường trở lại -> Xóa lỗi "Giả mạo" đi
+        // if (errorMsg.value.contains("giả mạo")) {
+        //   errorMsg.value = ""; // ✅ Reset về trạng thái bình thường
+        // }
 
         errorMsg.value = "";
 
@@ -221,8 +240,8 @@ class FaceAttendanceController extends GetxController {
         // Không reset currentCandidate ngay để tránh UI nhấp nháy, chỉ reset điểm
       }
     } catch (e, stack) {
-      debugPrint("❌ Error: $e");
-      debugPrint('Stack trace: $stack');
+      AppLog.error("❌ Error: $e");
+      AppLog.error('Stack trace: $stack');
     } finally {
       isProcessing.value = false; // Mở khóa luồng
     }
@@ -231,7 +250,7 @@ class FaceAttendanceController extends GetxController {
   Future<void> _handleCheckinSuccess(String name) async {
     checkinState.isSuccessCooldown = true; // Khóa hệ thống
 
-    debugPrint("🎉 CHECKIN SUCCESS: $name");
+    AppLog.info("🎉 CHECKIN SUCCESS: $name");
 
     Get.snackbar(
       "Điểm danh thành công",
@@ -354,7 +373,7 @@ class FaceAttendanceController extends GetxController {
         // Điện thoại hay bị thay đổi khoảng cách cầm tay. Chuyển sang Auto để mặt lúc nào cũng nét.
         await cameraController!.setFocusMode(FocusMode.auto);
       } catch (e) {
-        debugPrint("⚠️ Camera: Lỗi set FocusMode: $e");
+        AppLog.warning("⚠️ Camera: Lỗi set FocusMode: $e");
       }
 
       // Khối 3: Cứ để Auto Exposure (XÓA ĐOẠN KHÓA SÁNG CŨ ĐI)
@@ -362,7 +381,7 @@ class FaceAttendanceController extends GetxController {
         // Đảm bảo camera luôn tự thích nghi với môi trường
         await cameraController!.setExposureMode(ExposureMode.auto);
       } catch (e) {
-        debugPrint("⚠️ Camera: Lỗi set ExposureMode: $e");
+        AppLog.warning("⚠️ Camera: Lỗi set ExposureMode: $e");
       }
 
       // 6. BẮT ĐẦU STREAM HÌNH ẢNH
@@ -383,8 +402,8 @@ class FaceAttendanceController extends GetxController {
     if (_isDetecting) return;
     _isDetecting = true;
 
-    // ⏱️ BẮT ĐẦU ĐỒNG HỒ
-    final Stopwatch sw = Stopwatch()..start();
+    // // ⏱️ BẮT ĐẦU ĐỒNG HỒ
+    // final Stopwatch sw = Stopwatch()..start();
 
     Face? face;
 
@@ -392,7 +411,7 @@ class FaceAttendanceController extends GetxController {
       // 1. Detect khuôn mặt (ML Kit - Giữ nguyên)
       face = await _detectFaceFromImage(image);
     } catch (e) {
-      debugPrint("Error detecting: $e");
+      AppLog.error("Error detecting: $e");
     } finally {
       _isDetecting = false; // Luôn mở khóa detect
     }
@@ -404,13 +423,13 @@ class FaceAttendanceController extends GetxController {
       _smoother.reset();
       if (checkinState.matchStreak > 0) {
         checkinState.matchStreak = 0;
-        debugPrint("❌ Face lost. Reset streak.");
+        AppLog.warning("❌ Face lost. Reset streak.");
       }
       return;
     }
 
     // // Log Detect (Nên < 80ms)
-    // debugPrint("1️⃣ Detect: ${tDetect}ms");
+    // AppLog.info("1️⃣ Detect: ${tDetect}ms");
 
     // 2. Throttling (Giữ nguyên)
     if (_shouldSkipRecognition()) return;
@@ -434,9 +453,9 @@ class FaceAttendanceController extends GetxController {
         offset += plane.bytes.length;
       }
 
-      final int uvStride = image.planes.length > 1
-          ? image.planes[1].bytesPerRow
-          : image.planes[0].bytesPerRow;
+      // final int uvStride = image.planes.length > 1
+      //     ? image.planes[1].bytesPerRow
+      //     : image.planes[0].bytesPerRow;
 
       final faceRect = _smoother.smooth(face.boundingBox);
 
@@ -446,14 +465,14 @@ class FaceAttendanceController extends GetxController {
 
       // 5. Gửi sang Isolate (Xử lý ảnh bằng Dart thuần)
       // Input: YUV -> Output: List<double> (Pixels đã chuẩn hóa)
-      debugPrint("🚀 Gửi task sang Isolate...");
+      AppLog.info("🚀 Gửi task sang Isolate...");
 
       final dualResult = await _isolateService.processDualTaskInIsolate(
         address: nativeBuffer.address,
         width: image.width,
         height: image.height,
         yStride: image.planes[0].bytesPerRow,
-        uvStride: uvStride,
+        // uvStride: uvStride,
         face: face,
         rectX: faceRect.left.toInt(),
         rectY: faceRect.top.toInt(),
@@ -471,30 +490,29 @@ class FaceAttendanceController extends GetxController {
 
       // 6. Có kết quả từ Isolate -> Đưa vào Model
       if (recogCrop != null && spoofCrop != null) {
-        // --------------------------------------------------------------------------
-        try {
-          // Lấy thư mục tạm
-          final directory = await getExternalStorageDirectory();
-          final file = File('${directory!.path}/dart_input_tensor.txt');
+        // // --------------------------------------------------------------------------
+        // try {
+        //   // Lấy thư mục tạm
+        //   final directory = await getExternalStorageDirectory();
+        //   final file = File('${directory!.path}/dart_input_tensor.txt');
 
-          // Ghi chuỗi các số thực, cách nhau bởi dấu phẩy
-          String dataString = spoofCrop.join(',');
-          await file.writeAsString(dataString);
+        //   // Ghi chuỗi các số thực, cách nhau bởi dấu phẩy
+        //   String dataString = spoofCrop.join(',');
+        //   await file.writeAsString(dataString);
 
-          debugPrint("✅ Đã lưu tensor dump tại: ${file.path}");
-          debugPrint(
-            "👉 Hãy copy file này sang máy tính để chạy script Python.",
-          );
-        } catch (e) {
-          debugPrint("⚠️ Lỗi tạo đường dẫn: $e");
-        }
-        // --------------------------------------------------------------------------
+        //   AppLog.info("✅ Đã lưu tensor dump tại: ${file.path}");
+        //   AppLog.info(
+        //     "👉 Hãy copy file này sang máy tính để chạy script Python.",
+        //   );
+        // } catch (e) {
+        //   AppLog.warning("⚠️ Lỗi tạo đường dẫn: $e");
+        // }
+        // // --------------------------------------------------------------------------
 
-        await _performRecognition(recogCrop, spoofCrop, sw);
+        await _performRecognition(recogCrop, spoofCrop /*, sw*/);
 
         // int tTotal = sw.elapsedMilliseconds;
-
-        // debugPrint(
+        // AppLog.info(
         //   "⏱️ [${tTotal}ms] "
         //   "Detect: ${tDetect}ms | "
         //   "Crop: ${tCrop}ms | "
@@ -502,12 +520,12 @@ class FaceAttendanceController extends GetxController {
         //   "FPS: ${(1000 / tTotal).toStringAsFixed(1)}",
         // );
       } else {
-        debugPrint("⚠️ Isolate trả về null (Do mặt nghiêng hoặc lỗi ảnh)");
+        AppLog.warning("⚠️ Isolate trả về null (Do mặt nghiêng hoặc lỗi ảnh)");
         isProcessing.value = false;
       }
     } catch (e, s) {
-      debugPrint("❌ Lỗi processFrame: $e");
-      debugPrintStack(stackTrace: s);
+      AppLog.error("❌ Lỗi processFrame: $e");
+      AppLog.error("Dấu vết (StackTrace):\n$s");
       isProcessing.value = false;
     } finally {
       if (nativeBuffer != null) {
@@ -516,8 +534,8 @@ class FaceAttendanceController extends GetxController {
 
       _safeguardUnlock(); // Đảm bảo an toàn
 
-      // // Tổng kết thời gian 1 frame
-      sw.stop();
+      // // // Tổng kết thời gian 1 frame
+      // sw.stop();
     }
   }
 

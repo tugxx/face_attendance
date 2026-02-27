@@ -99,7 +99,10 @@ class FaceAttendanceView extends GetView<FaceAttendanceController> {
             String statusText = "";
             Color statusColor = Colors.white;
 
-            if (controller.isProcessing.value) {
+            if (controller.faceInstruction.value.isNotEmpty) {
+              statusText = controller.faceInstruction.value;
+              statusColor = Colors.orangeAccent; // Màu cam cảnh báo
+            } else if (controller.isProcessing.value) {
               // 1. Đang chạy TFLite (Máy đang tính toán)
               statusText = "⏳ Đang xử lý hình ảnh...";
               statusColor = Colors.yellowAccent;

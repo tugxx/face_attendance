@@ -1,9 +1,12 @@
-import 'dart:ffi'; // Để dùng Pointer, Void, Int32, Float, Uint8
+import 'dart:ffi';
 import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:ffi/ffi.dart';
 import 'package:flutter/services.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+
+import '../services/log_service.dart';
 
 class FaceProcessRequest {
   final Uint8List yuvBytes;
@@ -87,9 +90,9 @@ typedef ProcessFaceNative =
       Int32 width,
       Int32 height,
       Int32 yStride,
-      Int32 uvStride,
-      Pointer<Float> landmarks,
-      Int32 landmarkCount,
+      // Int32 uvStride,
+      // Pointer<Float> landmarks,
+      // Int32 landmarkCount,
       Int32 rectX,
       Int32 rectY,
       Int32 rectW,
@@ -97,7 +100,7 @@ typedef ProcessFaceNative =
       Int32 rotation,
       Int32 targetWidth,
       Int32 targetHeight,
-      Int32 modelType,
+      // Int32 modelType,
       Pointer<Float> output,
     );
 
@@ -121,9 +124,9 @@ typedef ProcessFaceDart =
       int width,
       int height,
       int yStride,
-      int uvStride,
-      Pointer<Float> landmarks,
-      int landmarkCount,
+      // int uvStride,
+      // Pointer<Float> landmarks,
+      // int landmarkCount,
       int rectX,
       int rectY,
       int rectW,
@@ -131,7 +134,7 @@ typedef ProcessFaceDart =
       int rotation,
       int targetWidth,
       int targetHeight,
-      int modelType,
+      // int modelType,
       Pointer<Float> output,
     );
 
@@ -163,7 +166,7 @@ class FaceProcessorNative {
             )
             .asFunction();
       } catch (_) {
-        debugPrint("⚠️ Missing process_face_affine");
+        AppLog.error("⚠️ Missing process_face_affine");
       }
 
       // Load hàm File (Mới)
@@ -174,7 +177,7 @@ class FaceProcessorNative {
             )
             .asFunction();
       } catch (_) {
-        debugPrint("⚠️ Missing process_file_affine_raw");
+        AppLog.error("⚠️ Missing process_file_affine_raw");
       }
 
       try {
@@ -182,12 +185,12 @@ class FaceProcessorNative {
             .lookup<NativeFunction<ProcessFaceNative>>('process_face_crop')
             .asFunction();
       } catch (_) {
-        debugPrint("⚠️ Missing spoofing");
+        AppLog.error("⚠️ Missing spoofing");
       }
 
-      debugPrint("✅ Đã load thư viện C++ thành công: $libName");
+      AppLog.info("✅ Đã load thư viện C++ thành công: $libName");
     } catch (e) {
-      debugPrint("❌ Lỗi load thư viện C++: $e");
+      AppLog.error("❌ Lỗi load thư viện C++: $e");
     }
   }
 
@@ -261,7 +264,7 @@ class FaceProcessorNative {
       final Float32List result = ptrOut.asTypedList(outLen);
       return List<double>.from(result);
     } catch (e) {
-      debugPrint("Native Error: $e");
+      AppLog.error("Native Error: $e");
       return null;
     } finally {
       calloc.free(ptrYuv);
@@ -290,10 +293,10 @@ class FaceProcessorNative {
       final Float32List result = ptrOut.asTypedList(outLen);
       return List<double>.from(result);
     } catch (e) {
-      debugPrint("Native File Error: $e");
+      AppLog.error("Native File Error: $e");
       return null;
     } finally {
-      calloc.free(ptrPath); // Nhớ free string
+      calloc.free(ptrPath);
       calloc.free(ptrLandmarks);
       calloc.free(ptrOut);
     }
@@ -417,16 +420,16 @@ class FaceProcessorNative {
     required int width,
     required int height,
     required int yStride,
-    required int uvStride,
+    // required int uvStride,
     required List<double> landmarks,
     required int rotation,
     required int rectX,
     required int rectY,
     required int rectW,
     required int rectH,
-    required int spoofWidth, // Truyền 80 hoặc 224
-    required int spoofHeight, // Truyền 80 hoặc 224
-    required int spoofModelType,
+    required int spoofWidth,
+    required int spoofHeight,
+    // required int spoofModelType,
   }) {
     if (_funcCamera == null || _funcSpoof == null) init();
 
@@ -445,8 +448,6 @@ class FaceProcessorNative {
     final int spoofLen = spoofWidth * spoofHeight * 3;
     final ptrOutSpoof = calloc<Float>(spoofLen);
 
-    // debugPrint("Địa chỉ YUV trong dual task: ${ptrYuv.address}");
-
     try {
       // TASK 1: Gọi hàm Affine (Recognition)
       _funcCamera!(ptrYuv, width, height, ptrLandmarks, rotation, ptrOutRecog);
@@ -457,9 +458,7 @@ class FaceProcessorNative {
         width,
         height,
         yStride,
-        uvStride,
-        ptrLandmarks,
-        5, // landmark_count
+        // uvStride,
         rotation,
         rectX,
         rectY,
@@ -467,7 +466,6 @@ class FaceProcessorNative {
         rectH,
         spoofWidth,
         spoofHeight,
-        spoofModelType,
         ptrOutSpoof,
       );
 
@@ -477,7 +475,7 @@ class FaceProcessorNative {
         'spoof': Float32List.fromList(ptrOutSpoof.asTypedList(spoofLen)),
       };
     } catch (e) {
-      debugPrint("Dual Task Error: $e");
+      AppLog.error("Dual Task Error: $e");
       return {'recog': null, 'spoof': null};
     } finally {
       // 5. Giải phóng toàn bộ 1 lượt
@@ -504,7 +502,7 @@ class FaceProcessorNative {
 //       request.sensorOrientation,
 //     );
 //   } catch (e) {
-//     debugPrint("❌ Isolate Error: $e");
+//     AppLog.error("❌ Isolate Error: $e");
 //     return null;
 //   }
 // }

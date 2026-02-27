@@ -2,9 +2,11 @@ import 'dart:async';
 import 'dart:isolate';
 import 'dart:ffi';
 
-import 'package:flutter/foundation.dart';
+// import 'package:flutter/foundation.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+
 import '../../app/types/face_progress.dart';
+import '../services/log_service.dart';
 
 class FaceIsolateService {
   late Isolate _isolate;
@@ -16,7 +18,7 @@ class FaceIsolateService {
   final Map<int, Completer<dynamic>> _pendingRequests = {};
   int _nextRequestId = 0;
 
-  // Khởi tạo Isolate (Chạy 1 lần duy nhất)
+  // Khởi tạo Isolate 
   Future<void> start() async {
     final receivePort = ReceivePort();
 
@@ -28,7 +30,7 @@ class FaceIsolateService {
       if (message is SendPort) {
         _sendPort = message;
         _isReady = true;
-        debugPrint("✅ FaceIsolateService: Worker Started!");
+        AppLog.info("✅ FaceIsolateService: Worker Started!");
       } else if (message is List) {
         // Message trả về: [RequestId, ResultList]
         int reqId = message[0];
@@ -79,7 +81,7 @@ class FaceIsolateService {
     required int width,
     required int height,
     required int yStride,
-    required int uvStride,
+    // required int uvStride,
     required Face face,
     required int rectX,
     required int rectY,
@@ -95,17 +97,15 @@ class FaceIsolateService {
     _pendingRequests[reqId] = completer; // Lưu completer chờ Map kết quả
 
     final landmarksData = _extractLandmarks(face);
-    // debugPrint("Landmarks Data: $landmarksData");
 
-    // debugPrint("Địa chỉ YUV gửi sang Isolate: $address");
-
+    // AppLog.info("Địa chỉ YUV gửi sang Isolate: $address");
     _sendPort.send([
       reqId,
       address,
       width,
       height,
       yStride,
-      uvStride,
+      // uvStride,
       landmarksData,
       rectX,
       rectY,
@@ -181,27 +181,25 @@ class FaceIsolateService {
       final int width = message[2];
       final int height = message[3];
       final int yStride = message[4];
-      final int uvStride = message[5];
-      final List<double> landmarks = message[6]; // Nhận list landmarks
-      final int rectX = message[7];
-      final int rectY = message[8];
-      final int rectW = message[9];
-      final int rectH = message[10];
-      final int rotation = message[11];
-      final int spoofModelType = message[12];
-      final int spoofTargetSize = message[13];
+      // final int uvStride = message[5];
+      final List<double> landmarks = message[5]; // Nhận list landmarks
+      final int rectX = message[6];
+      final int rectY = message[7];
+      final int rectW = message[8];
+      final int rectH = message[9];
+      final int rotation = message[10];
+      // final int spoofModelType = message[12];
+      final int spoofTargetSize = message[12];
 
       try {
-        // debugPrint("Địa chỉ YUV nhận trong isolate listen: $address");
         final Pointer<Uint8> ptrYuv = Pointer<Uint8>.fromAddress(address);
-        // debugPrint("Worker processing pointer: ${ptrYuv.address}");
 
         final result = FaceProcessorNative.processDualTask(
           ptrYuv: ptrYuv,
           width: width,
           height: height,
           yStride: yStride,
-          uvStride: uvStride,
+          // uvStride: uvStride,
           landmarks: landmarks,
           rotation: rotation,
           rectX: rectX,
@@ -210,13 +208,13 @@ class FaceIsolateService {
           rectH: rectH,
           spoofWidth: spoofTargetSize,
           spoofHeight: spoofTargetSize,
-          spoofModelType: spoofModelType,
+          // spoofModelType: spoofModelType,
         );
 
         // Trả về: [ID, Dữ liệu]
         mainSendPort.send([reqId, result]);
       } catch (e) {
-        debugPrint("Worker Error: $e");
+        // debugPrint("Worker Error: $e");
         mainSendPort.send([reqId, null]);
       }
     });
