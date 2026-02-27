@@ -54,3 +54,7 @@ assets/*
 debug_crop_final.jpg
 debug_face.jpg
 
+android_old/
+android_old
+android_old/*
+

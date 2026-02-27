@@ -67,29 +67,71 @@ typedef ProcessFileRawDart =
     );
 
 // C. Cho Spoofing
-typedef ProcessAntiSpoofFunc =
+// typedef ProcessFaceNative =
+//     Void Function(
+//       Pointer<Uint8> yuvBytes,
+//       Int32 width,
+//       Int32 height,
+//       Pointer<Float> landmarks,
+//       Int32 landmarkCount,
+//       Int32 rotation,
+//       Int32 targetWidth,
+//       Int32 targetHeight,
+//       Int32 modelType,
+//       Pointer<Float> output,
+//     );
+
+typedef ProcessFaceNative =
     Void Function(
-      Pointer<Uint8> yuvBytes,
+      Pointer<Uint8> ptrYuv,
       Int32 width,
       Int32 height,
-      Int32 x,
-      Int32 y,
-      Int32 w,
-      Int32 h,
+      Int32 yStride,
+      Int32 uvStride,
+      Pointer<Float> landmarks,
+      Int32 landmarkCount,
+      Int32 rectX,
+      Int32 rectY,
+      Int32 rectW,
+      Int32 rectH,
       Int32 rotation,
+      Int32 targetWidth,
+      Int32 targetHeight,
+      Int32 modelType,
       Pointer<Float> output,
     );
 
-typedef ProcessAntiSpoofDart =
+// typedef ProcessFaceDart =
+//     void Function(
+//       Pointer<Uint8> yuvBytes,
+//       int width,
+//       int height,
+//       Pointer<Float> landmarks,
+//       int landmarkCount,
+//       int rotation,
+//       int targetWidth,
+//       int targetHeight,
+//       int modelType,
+//       Pointer<Float> output,
+//     );
+
+typedef ProcessFaceDart =
     void Function(
-      Pointer<Uint8> yuvBytes,
+      Pointer<Uint8> ptrYuv,
       int width,
       int height,
-      int x,
-      int y,
-      int w,
-      int h,
+      int yStride,
+      int uvStride,
+      Pointer<Float> landmarks,
+      int landmarkCount,
+      int rectX,
+      int rectY,
+      int rectW,
+      int rectH,
       int rotation,
+      int targetWidth,
+      int targetHeight,
+      int modelType,
       Pointer<Float> output,
     );
 
@@ -102,7 +144,7 @@ class FaceProcessorNative {
 
   static ProcessFaceAffineDart? _funcCamera;
   static ProcessFileRawDart? _funcFile;
-  static ProcessAntiSpoofDart? _funcSpoof;
+  static ProcessFaceDart? _funcSpoof;
 
   static void init() {
     if (_lib != null) return;
@@ -137,9 +179,7 @@ class FaceProcessorNative {
 
       try {
         _funcSpoof = _lib!
-            .lookup<NativeFunction<ProcessAntiSpoofFunc>>(
-              'process_antispoof_crop',
-            )
+            .lookup<NativeFunction<ProcessFaceNative>>('process_face_crop')
             .asFunction();
       } catch (_) {
         debugPrint("⚠️ Missing spoofing");
@@ -259,70 +299,111 @@ class FaceProcessorNative {
     }
   }
 
-  static List<double>? processWithRawLandmarks(
-    Uint8List yuvBytes,
-    int width,
-    int height,
-    List<double> landmarksList, // Nhận List trực tiếp
-    int rotation,
-  ) {
-    if (_funcCamera == null) init();
-    if (_funcCamera == null) return null;
-
-    // Cấp phát Landmark từ List có sẵn
-    final Pointer<Float> ptrLandmarks = calloc<Float>(10);
-    final list = ptrLandmarks.asTypedList(10);
-    list.setAll(0, landmarksList);
-
-    // Cấp phát YUV
-    final Pointer<Uint8> ptrYuv = calloc<Uint8>(yuvBytes.length);
-    ptrYuv.asTypedList(yuvBytes.length).setAll(0, yuvBytes);
-
-    final int outLen = 112 * 112 * 3;
-    final Pointer<Float> ptrOut = calloc<Float>(outLen);
-
-    try {
-      _funcCamera!(ptrYuv, width, height, ptrLandmarks, rotation, ptrOut);
-      final Float32List result = ptrOut.asTypedList(outLen);
-      return List<double>.from(result);
-    } catch (e) {
-      return null;
-    } finally {
-      calloc.free(ptrYuv);
-      calloc.free(ptrLandmarks);
-      calloc.free(ptrOut);
-    }
-  }
-
-  // // --- HÀM XỬ LÝ ANTI-SPOOF ---
-  // static List<double>? processAntiSpoof(
+  // static List<double>? processWithRawLandmarks(
   //   Uint8List yuvBytes,
-  //   int width, int height,
-  //   Face face,
-  //   int rotation
+  //   int width,
+  //   int height,
+  //   List<double> landmarksList, // Nhận List trực tiếp
+  //   int rotation,
   // ) {
-  //   if (_funcSpoof == null) init();
+  //   if (_funcCamera == null) init();
+  //   if (_funcCamera == null) return null;
 
-  //   final box = face.boundingBox;
+  //   // Cấp phát Landmark từ List có sẵn
+  //   final Pointer<Float> ptrLandmarks = calloc<Float>(10);
+  //   final list = ptrLandmarks.asTypedList(10);
+  //   list.setAll(0, landmarksList);
 
-  //   // Cấp phát YUV (Copy)
+  //   // Cấp phát YUV
   //   final Pointer<Uint8> ptrYuv = calloc<Uint8>(yuvBytes.length);
   //   ptrYuv.asTypedList(yuvBytes.length).setAll(0, yuvBytes);
 
-  //   // Output 80x80x3
-  //   final int outLen = 80 * 80 * 3;
+  //   final int outLen = 112 * 112 * 3;
+  //   final Pointer<Float> ptrOut = calloc<Float>(outLen);
+
+  //   try {
+  //     _funcCamera!(ptrYuv, width, height, ptrLandmarks, rotation, ptrOut);
+  //     final Float32List result = ptrOut.asTypedList(outLen);
+  //     return List<double>.from(result);
+  //   } catch (e) {
+  //     return null;
+  //   } finally {
+  //     calloc.free(ptrYuv);
+  //     calloc.free(ptrLandmarks);
+  //     calloc.free(ptrOut);
+  //   }
+  // }
+
+  // static List<double>? processAntiSpoofRaw(
+  //   Uint8List yuvBytes,
+  //   int width,
+  //   int height,
+  //   List<double> landmarks, // Dùng landmarks để lấy box (hoặc truyền box riêng)
+  //   int rotation,
+  //   int targetSize,
+  // ) {
+  //   if (_funcSpoof == null) init();
+
+  //   // Lưu ý: Hàm C++ process_antispoof_crop đang nhận x, y, w, h
+  //   // Ta cần tính Box bao quanh các landmark để làm input cho nó
+  //   // (Hoặc sửa C++ để nhận landmarks luôn).
+  //   // Ở đây ta tính nhanh box từ landmarks:
+
+  //   double minX = 10000, minY = 10000, maxX = 0, maxY = 0;
+
+  //   // Landmarks có 5 điểm (10 số)
+  //   for (int i = 0; i < 10; i += 2) {
+  //     double lx = landmarks[i];
+  //     double ly = landmarks[i + 1];
+  //     if (lx < minX) minX = lx;
+  //     if (lx > maxX) maxX = lx;
+  //     if (ly < minY) minY = ly;
+  //     if (ly > maxY) maxY = ly;
+  //   }
+
+  //   // Box thô (chưa padding)
+  //   double wData = maxX - minX;
+  //   double hData = maxY - minY;
+
+  //   // Theo kinh nghiệm cộng đồng: Landmarks 5 điểm thường hẹp hơn Box thật của Face Detector.
+  //   // Ta cần padding nhẹ để Box này tương đương với Box của Face Detection.
+  //   int cx = (minX + wData / 2).toInt();
+  //   int cy = (minY + hData / 2).toInt();
+
+  //   // Giả lập Box Detection từ Landmarks (mở rộng khoảng 1.5 lần so với cụm mắt mũi miệng)
+  //   int wBox = (wData * 1.5).toInt();
+  //   int hBox = (hData * 1.5).toInt();
+
+  //   int x = cx - (wBox ~/ 2);
+  //   int y = cy - (hBox ~/ 2);
+
+  //   // -------------------------------------------------------------
+  //   // BƯỚC 2: GỌI C++ ĐỂ CROP & SCALE (Logic Scale 2.7 nằm trong C++)
+  //   // -------------------------------------------------------------
+
+  //   final Pointer<Uint8> ptrYuv = calloc<Uint8>(yuvBytes.length);
+  //   ptrYuv.asTypedList(yuvBytes.length).setAll(0, yuvBytes);
+
+  //   final int outLen = targetSize * targetSize * 3;
   //   final Pointer<Float> ptrOut = calloc<Float>(outLen);
 
   //   try {
   //     _funcSpoof!(
-  //       ptrYuv, width, height,
-  //       box.left.toInt(), box.top.toInt(), box.width.toInt(), box.height.toInt(),
+  //       ptrYuv,
+  //       width,
+  //       height,
+  //       x,
+  //       y,
+  //       wBox,
+  //       hBox,
   //       rotation,
-  //       ptrOut
+  //       targetSize,
+  //       targetSize,
+  //       ptrOut,
   //     );
 
   //     final Float32List result = ptrOut.asTypedList(outLen);
-  //     return List<double>.from(result); // Copy về Dart
+  //     return List<double>.from(result);
   //   } catch (e) {
   //     return null;
   //   } finally {
@@ -331,90 +412,99 @@ class FaceProcessorNative {
   //   }
   // }
 
-  static List<double>? processAntiSpoofRaw(
-    Uint8List yuvBytes,
-    int width,
-    int height,
-    List<double> landmarks, // Dùng landmarks để lấy box (hoặc truyền box riêng)
-    int rotation,
-  ) {
-    if (_funcSpoof == null) init();
+  static Map<String, List<double>?> processDualTask({
+    required Pointer<Uint8> ptrYuv,
+    required int width,
+    required int height,
+    required int yStride,
+    required int uvStride,
+    required List<double> landmarks,
+    required int rotation,
+    required int rectX,
+    required int rectY,
+    required int rectW,
+    required int rectH,
+    required int spoofWidth, // Truyền 80 hoặc 224
+    required int spoofHeight, // Truyền 80 hoặc 224
+    required int spoofModelType,
+  }) {
+    if (_funcCamera == null || _funcSpoof == null) init();
 
-    // Lưu ý: Hàm C++ process_antispoof_crop đang nhận x, y, w, h
-    // Ta cần tính Box bao quanh các landmark để làm input cho nó
-    // (Hoặc sửa C++ để nhận landmarks luôn).
-    // Ở đây ta tính nhanh box từ landmarks:
+    // // 1. Cấp phát YUV duy nhất 1 lần cho cả 2 task
+    // final ptrYuv = calloc<Uint8>(yuvBytes.length);
+    // ptrYuv.asTypedList(yuvBytes.length).setAll(0, yuvBytes);
 
-    double minX = 10000, minY = 10000, maxX = 0, maxY = 0;
+    // 2. Cấp phát Landmark
+    final ptrLandmarks = calloc<Float>(10);
+    ptrLandmarks.asTypedList(10).setAll(0, landmarks);
 
-    // Landmarks có 5 điểm (10 số)
-    for (int i = 0; i < 10; i += 2) {
-      double lx = landmarks[i];
-      double ly = landmarks[i + 1];
-      if (lx < minX) minX = lx;
-      if (lx > maxX) maxX = lx;
-      if (ly < minY) minY = ly;
-      if (ly > maxY) maxY = ly;
-    }
+    // 3. Chuẩn bị Buffer đầu ra cho cả 2
+    final int recogLen = 112 * 112 * 3;
+    final ptrOutRecog = calloc<Float>(recogLen);
 
-    // Box thô (chưa padding)
-    double wData = maxX - minX;
-    double hData = maxY - minY;
+    final int spoofLen = spoofWidth * spoofHeight * 3;
+    final ptrOutSpoof = calloc<Float>(spoofLen);
 
-    // Theo kinh nghiệm cộng đồng: Landmarks 5 điểm thường hẹp hơn Box thật của Face Detector.
-    // Ta cần padding nhẹ để Box này tương đương với Box của Face Detection.
-    int cx = (minX + wData / 2).toInt();
-    int cy = (minY + hData / 2).toInt();
-
-    // Giả lập Box Detection từ Landmarks (mở rộng khoảng 1.5 lần so với cụm mắt mũi miệng)
-    int wBox = (wData * 1.5).toInt();
-    int hBox = (hData * 1.5).toInt();
-
-    int x = cx - (wBox ~/ 2);
-    int y = cy - (hBox ~/ 2);
-
-    // -------------------------------------------------------------
-    // BƯỚC 2: GỌI C++ ĐỂ CROP & SCALE (Logic Scale 2.7 nằm trong C++)
-    // -------------------------------------------------------------
-
-    final Pointer<Uint8> ptrYuv = calloc<Uint8>(yuvBytes.length);
-    ptrYuv.asTypedList(yuvBytes.length).setAll(0, yuvBytes);
-
-    final int outLen = 80 * 80 * 3;
-
-    final Pointer<Float> ptrOut = calloc<Float>(outLen);
+    // debugPrint("Địa chỉ YUV trong dual task: ${ptrYuv.address}");
 
     try {
-      _funcSpoof!(ptrYuv, width, height, x, y, wBox, hBox, rotation, ptrOut);
+      // TASK 1: Gọi hàm Affine (Recognition)
+      _funcCamera!(ptrYuv, width, height, ptrLandmarks, rotation, ptrOutRecog);
 
-      final Float32List result = ptrOut.asTypedList(outLen);
-      return List<double>.from(result);
+      // TASK 2: Gọi Spoof
+      _funcSpoof!(
+        ptrYuv,
+        width,
+        height,
+        yStride,
+        uvStride,
+        ptrLandmarks,
+        5, // landmark_count
+        rotation,
+        rectX,
+        rectY,
+        rectW,
+        rectH,
+        spoofWidth,
+        spoofHeight,
+        spoofModelType,
+        ptrOutSpoof,
+      );
+
+      // 4. Gom kết quả
+      return {
+        'recog': Float32List.fromList(ptrOutRecog.asTypedList(recogLen)),
+        'spoof': Float32List.fromList(ptrOutSpoof.asTypedList(spoofLen)),
+      };
     } catch (e) {
-      return null;
+      debugPrint("Dual Task Error: $e");
+      return {'recog': null, 'spoof': null};
     } finally {
-      calloc.free(ptrYuv);
-      calloc.free(ptrOut);
+      // 5. Giải phóng toàn bộ 1 lượt
+      calloc.free(ptrLandmarks);
+      calloc.free(ptrOutRecog);
+      calloc.free(ptrOutSpoof);
     }
   }
 }
 
-Future<List<double>?> isolateFaceProcessor(FaceProcessRequest request) async {
-  // 1. Khởi tạo môi trường cho Isolate (Bắt buộc để dùng các platform channel nếu cần)
-  if (request.rootToken != null) {
-    BackgroundIsolateBinaryMessenger.ensureInitialized(request.rootToken!);
-  }
+// Future<List<double>?> isolateFaceProcessor(FaceProcessRequest request) async {
+//   // 1. Khởi tạo môi trường cho Isolate (Bắt buộc để dùng các platform channel nếu cần)
+//   if (request.rootToken != null) {
+//     BackgroundIsolateBinaryMessenger.ensureInitialized(request.rootToken!);
+//   }
 
-  try {
-    // YUV -> RGB -> Rotate -> Crop -> Resize -> Normalize
-    return FaceProcessorNative.process(
-      request.yuvBytes,
-      request.width,
-      request.height,
-      request.face, // Truyền thẳng object Face
-      request.sensorOrientation,
-    );
-  } catch (e) {
-    debugPrint("❌ Isolate Error: $e");
-    return null;
-  }
-}
+//   try {
+//     // YUV -> RGB -> Rotate -> Crop -> Resize -> Normalize
+//     return FaceProcessorNative.process(
+//       request.yuvBytes,
+//       request.width,
+//       request.height,
+//       request.face, // Truyền thẳng object Face
+//       request.sensorOrientation,
+//     );
+//   } catch (e) {
+//     debugPrint("❌ Isolate Error: $e");
+//     return null;
+//   }
+// }

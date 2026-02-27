@@ -32,25 +32,10 @@ android {
 
     buildTypes {
         release {
-            // Bật 2 dòng này để Obfuscate và xóa resource thừa
-            isMinifyEnabled = true 
-            isShrinkResources = true
-            
-            // Hàm getDefaultProguardFile chuẩn Kotlin
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
-            
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
         }
-    }
-
-    aaptOptions {
-        noCompress += "tflite"
-        noCompress += "lite"
     }
 
     externalNativeBuild {

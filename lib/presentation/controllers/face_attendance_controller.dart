@@ -1,15 +1,19 @@
 import 'dart:io';
+import 'dart:ffi';
 
+import 'package:ffi/ffi.dart';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../../app/utils/camera_utils.dart';
 import '../../app/services/face_recognition_service.dart';
 import '../../app/services/face_isolate_service.dart';
 import '../../app/services/face_antispoofing_service.dart';
+import '../../app/services/face_smoothier_service.dart';
 
 class FaceCheckinState {
   // Biến cấu hình
@@ -38,6 +42,7 @@ class FaceAttendanceController extends GetxController {
   final FaceRecognitionService _aiService = FaceRecognitionService();
   final FaceIsolateService _isolateService = FaceIsolateService();
   final _spoofService = FaceAntiSpoofingService();
+  final _smoother = BBoxSmoother();
 
   var isInitialized = false.obs; // Cờ báo hiệu Camera đã bật chưa.
   var recognizedName = "Unknown".obs;
@@ -120,7 +125,7 @@ class FaceAttendanceController extends GetxController {
 
   Future<void> _performRecognition(
     List<double> recogPixels, // 112x112
-    List<double> spoofPixels, // 80x80
+    List<double> spoofPixels, // 80x80 (224x224)
     Stopwatch sw,
   ) async {
     if (checkinState.isSuccessCooldown) {
@@ -134,7 +139,7 @@ class FaceAttendanceController extends GetxController {
       return;
     }
 
-    int tStartAI = sw.elapsedMilliseconds;
+    // int tStartAI = sw.elapsedMilliseconds;
 
     try {
       // ---------------------------------------------------------
@@ -148,7 +153,7 @@ class FaceAttendanceController extends GetxController {
       final futureIdentity = _aiService.predict(recogPixels);
 
       // Gọi Liveness (Anti-Spoofing) luôn, không cần chờ ID
-      final futureLiveness = Future(() => _spoofService.predict(spoofPixels));
+      final futureLiveness = _spoofService.predict(spoofPixels);
 
       // Chờ cả 2 kết quả trả về
       final results = await Future.wait([futureIdentity, futureLiveness]);
@@ -157,8 +162,8 @@ class FaceAttendanceController extends GetxController {
         debugPrint("Độ similarity: ${recognition.distance}");
       });
 
-      int tEndAI = sw.elapsedMilliseconds;
-      debugPrint("3️⃣ AI Inference (2 Models): ${tEndAI - tStartAI} ms");
+      // int tEndAI = sw.elapsedMilliseconds;
+      // debugPrint("3️⃣ AI Inference (2 Models): ${tEndAI - tStartAI} ms");
 
       final RecognitionResult idResult = results[0] as RecognitionResult;
       final bool isRealPerson = results[1] as bool;
@@ -283,13 +288,12 @@ class FaceAttendanceController extends GetxController {
       // 2. Cấu hình ML Kit
       _faceDetector = FaceDetector(
         options: FaceDetectorOptions(
-          performanceMode: FaceDetectorMode.fast, // Ưu tiên độ chính xác
+          performanceMode: FaceDetectorMode.accurate, // Ưu tiên độ chính xác
           enableContours:
               false, // Không cần vẽ đường viền bao quanh mặt (giúp giảm tải xử lý nếu không dùng để vẽ UI).
           // Bật tìm các điểm mốc (Mắt, mũi, miệng, má...).
           // QUAN TRỌNG: Dùng để căn chỉnh (align) khuôn mặt cho thẳng trước khi đưa vào AI nhận diện.
           enableLandmarks: true,
-          // Không cần phân loại (ví dụ: đang cười hay mở mắt), tắt đi cho nhẹ.
           enableClassification: false,
           minFaceSize: 0.15,
         ),
@@ -333,7 +337,7 @@ class FaceAttendanceController extends GetxController {
       // 4. CẤU HÌNH CONTROLLER
       cameraController = CameraController(
         _currentCamera!,
-        ResolutionPreset.medium,
+        ResolutionPreset.high,
         enableAudio: false, // Tắt thu âm cho nhẹ, vì chấm công không cần tiếng
         imageFormatGroup: Platform.isAndroid
             ? ImageFormatGroup
@@ -343,6 +347,23 @@ class FaceAttendanceController extends GetxController {
 
       // 5. KHỞI ĐỘNG PHẦN CỨNG
       await cameraController!.initialize();
+
+      // Khối 1: Xử lý Lấy nét (Focus)
+      try {
+        // Chuyển sang AUTO thay vì LOCKED.
+        // Điện thoại hay bị thay đổi khoảng cách cầm tay. Chuyển sang Auto để mặt lúc nào cũng nét.
+        await cameraController!.setFocusMode(FocusMode.auto);
+      } catch (e) {
+        debugPrint("⚠️ Camera: Lỗi set FocusMode: $e");
+      }
+
+      // Khối 3: Cứ để Auto Exposure (XÓA ĐOẠN KHÓA SÁNG CŨ ĐI)
+      try {
+        // Đảm bảo camera luôn tự thích nghi với môi trường
+        await cameraController!.setExposureMode(ExposureMode.auto);
+      } catch (e) {
+        debugPrint("⚠️ Camera: Lỗi set ExposureMode: $e");
+      }
 
       // 6. BẮT ĐẦU STREAM HÌNH ẢNH
       // Truyền hàm _processFrame vào để xử lý từng khung hình
@@ -380,6 +401,7 @@ class FaceAttendanceController extends GetxController {
 
     // Nếu không có mặt -> Dừng
     if (face == null) {
+      _smoother.reset();
       if (checkinState.matchStreak > 0) {
         checkinState.matchStreak = 0;
         debugPrint("❌ Face lost. Reset streak.");
@@ -396,10 +418,27 @@ class FaceAttendanceController extends GetxController {
     // 3. Khoá luồng xử lý nhận diện
     _lockProcessing();
 
+    Pointer<Uint8>? nativeBuffer;
     try {
-      // 4. Chuẩn bị dữ liệu gửi sang Isolate
-      // Copy YUV bytes (Phải copy vì CameraImage buffer sẽ bị hủy ở frame sau)
-      final rawBytes = CameraUtils.cloneCameraBytes(image);
+      // // 4. Chuẩn bị dữ liệu gửi sang Isolate
+      final int totalBytes = image.planes.fold(
+        0,
+        (sum, plane) => sum + plane.bytes.length,
+      );
+      nativeBuffer = calloc<Uint8>(totalBytes);
+
+      // Copy nhanh từ mảng bytes của camera vào native buffer
+      int offset = 0;
+      for (var plane in image.planes) {
+        nativeBuffer.asTypedList(totalBytes).setAll(offset, plane.bytes);
+        offset += plane.bytes.length;
+      }
+
+      final int uvStride = image.planes.length > 1
+          ? image.planes[1].bytesPerRow
+          : image.planes[0].bytesPerRow;
+
+      final faceRect = _smoother.smooth(face.boundingBox);
 
       // // 5. Gửi sang Isolate -> Gọi C++ Native
       // // Đo thời gian bắt đầu gửi
@@ -409,33 +448,49 @@ class FaceAttendanceController extends GetxController {
       // Input: YUV -> Output: List<double> (Pixels đã chuẩn hóa)
       debugPrint("🚀 Gửi task sang Isolate...");
 
-      final futureRecogCrop = _isolateService.processInIsolate(
-        rawBytes,
-        image.width,
-        image.height,
-        face, // Hàm này sẽ tự extract landmarks ra list số thực
-        _currentCamera!.sensorOrientation,
+      final dualResult = await _isolateService.processDualTaskInIsolate(
+        address: nativeBuffer.address,
+        width: image.width,
+        height: image.height,
+        yStride: image.planes[0].bytesPerRow,
+        uvStride: uvStride,
+        face: face,
+        rectX: faceRect.left.toInt(),
+        rectY: faceRect.top.toInt(),
+        rectW: faceRect.width.toInt(),
+        rectH: faceRect.height.toInt(),
+        rotation: _currentCamera!.sensorOrientation,
+        spoofSize: _spoofService.inputWidth,
       );
-
-      final futureSpoofCrop = _isolateService.processAntiSpoofInIsolate(
-        rawBytes,
-        image.width,
-        image.height,
-        face,
-        _currentCamera!.sensorOrientation,
-      );
-
-      final crops = await Future.wait([futureRecogCrop, futureSpoofCrop]);
-
-      final List<double>? recogPixels = crops[0];
-      final List<double>? spoofPixels = crops[1];
 
       // int tEndCrop = sw.elapsedMilliseconds;
       // int tCrop = tEndCrop - tStartCrop; // Thời gian thực tế của bước Crop
 
+      final List<double>? recogCrop = dualResult!['recog'];
+      final List<double>? spoofCrop = dualResult['spoof'];
+
       // 6. Có kết quả từ Isolate -> Đưa vào Model
-      if (recogPixels != null && spoofPixels != null) {
-        await _performRecognition(recogPixels, spoofPixels, sw);
+      if (recogCrop != null && spoofCrop != null) {
+        // --------------------------------------------------------------------------
+        try {
+          // Lấy thư mục tạm
+          final directory = await getExternalStorageDirectory();
+          final file = File('${directory!.path}/dart_input_tensor.txt');
+
+          // Ghi chuỗi các số thực, cách nhau bởi dấu phẩy
+          String dataString = spoofCrop.join(',');
+          await file.writeAsString(dataString);
+
+          debugPrint("✅ Đã lưu tensor dump tại: ${file.path}");
+          debugPrint(
+            "👉 Hãy copy file này sang máy tính để chạy script Python.",
+          );
+        } catch (e) {
+          debugPrint("⚠️ Lỗi tạo đường dẫn: $e");
+        }
+        // --------------------------------------------------------------------------
+
+        await _performRecognition(recogCrop, spoofCrop, sw);
 
         // int tTotal = sw.elapsedMilliseconds;
 
@@ -455,6 +510,10 @@ class FaceAttendanceController extends GetxController {
       debugPrintStack(stackTrace: s);
       isProcessing.value = false;
     } finally {
+      if (nativeBuffer != null) {
+        calloc.free(nativeBuffer);
+      }
+
       _safeguardUnlock(); // Đảm bảo an toàn
 
       // // Tổng kết thời gian 1 frame

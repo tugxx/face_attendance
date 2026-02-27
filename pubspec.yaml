@@ -70,6 +70,12 @@ flutter:
   assets:
     - assets/models/mobilefacenet.tflite
     - assets/models/fasnet_float32.tflite
+    # - assets/models/litmas_model_float32.tflite
+    # - assets/models/deeppix_slim_float32.tflite
+    # - assets/models/litmas_model_float32_new.tflite
+    - assets/models/anti-spoof-mn3_fixed_float32.tflite
+    - assets/models/anti-spoof-mn3_fixed_float32_testingggggg.tflite
+    - assets/models/temp_model_sim_float32.tflite
     # - assets/models/MobileFaceNet_testing_2.tflite
     # - assets/models/w600k_mbf_float32.tflite
     # - assets/models/output_model_test.tflite

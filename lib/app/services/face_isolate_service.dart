@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:isolate';
+import 'dart:ffi';
+
 import 'package:flutter/foundation.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import '../../app/types/face_progress.dart';
@@ -11,7 +13,7 @@ class FaceIsolateService {
   bool _isReady = false;
 
   // Dùng Map để lưu các Completer đang chờ, Key là ID
-  final Map<int, Completer<List<double>?>> _pendingRequests = {};
+  final Map<int, Completer<dynamic>> _pendingRequests = {};
   int _nextRequestId = 0;
 
   // Khởi tạo Isolate (Chạy 1 lần duy nhất)
@@ -30,7 +32,7 @@ class FaceIsolateService {
       } else if (message is List) {
         // Message trả về: [RequestId, ResultList]
         int reqId = message[0];
-        List<double>? result = message[1] as List<double>?;
+        dynamic result = message[1];
 
         // Tìm và complete đúng request
         if (_pendingRequests.containsKey(reqId)) {
@@ -41,61 +43,119 @@ class FaceIsolateService {
     });
   }
 
-  // --- HÀM 1: CROP NHẬN DIỆN (112x112) ---
-  Future<List<double>?> processInIsolate(
-    Uint8List yuvBytes,
-    int w,
-    int h,
-    Face face,
-    int rot,
-  ) async {
-    return _sendRequest(yuvBytes, w, h, face, rot, 0); // Type 0
-  }
+  // // --- HÀM 1: CROP NHẬN DIỆN (112x112) ---
+  // Future<List<double>?> processInIsolate(
+  //   Uint8List yuvBytes,
+  //   int w,
+  //   int h,
+  //   Face face,
+  //   int rot,
+  // ) async {
+  //   return _sendRequest(yuvBytes, w, h, face, rot, 0); // Type 0
+  // }
 
-  // --- HÀM 2: CROP ANTI-SPOOF (80x80) ---
-  Future<List<double>?> processAntiSpoofInIsolate(
-    Uint8List yuvBytes,
-    int w,
-    int h,
-    Face face,
-    int rot,
-  ) async {
-    return _sendRequest(yuvBytes, w, h, face, rot, 1); // Type 1
-  }
+  // // --- HÀM 2: CROP ANTI-SPOOF ---
+  // Future<List<double>?> processAntiSpoofInIsolate(
+  //   Uint8List yuvBytes,
+  //   int w,
+  //   int h,
+  //   Face face,
+  //   int rotation,
+  //   int targetSize,
+  // ) async {
+  //   return _sendRequest(
+  //     yuvBytes,
+  //     w,
+  //     h,
+  //     face,
+  //     rotation,
+  //     1,
+  //     targetSize,
+  //   ); // Type 1
+  // }
 
-  Future<List<double>?> _sendRequest(
-    Uint8List yuvBytes,
-    int width,
-    int height,
-    Face face,
-    int rotation,
-    int type,
-  ) async {
+  Future<Map<String, List<double>?>?> processDualTaskInIsolate({
+    required int address,
+    required int width,
+    required int height,
+    required int yStride,
+    required int uvStride,
+    required Face face,
+    required int rectX,
+    required int rectY,
+    required int rectW,
+    required int rectH,
+    required int rotation,
+    required int spoofSize,
+  }) async {
     if (!_isReady) return null;
 
-    final completer = Completer<List<double>?>();
+    final completer = Completer<Map<String, List<double>?>?>();
     int reqId = _nextRequestId++;
-    _pendingRequests[reqId] = completer;
+    _pendingRequests[reqId] = completer; // Lưu completer chờ Map kết quả
 
     final landmarksData = _extractLandmarks(face);
-    if (landmarksData == null) {
-      _pendingRequests.remove(reqId);
-      return null;
-    }
+    // debugPrint("Landmarks Data: $landmarksData");
+
+    // debugPrint("Địa chỉ YUV gửi sang Isolate: $address");
 
     _sendPort.send([
       reqId,
-      yuvBytes,
+      address,
       width,
       height,
+      yStride,
+      uvStride,
       landmarksData,
+      rectX,
+      rectY,
+      rectW,
+      rectH,
       rotation,
-      type, // Thêm type vào cuối
+      0, // type: 0 bây giờ hiểu là chạy Dual Task
+      spoofSize,
     ]);
 
-    final result = await completer.future;
-    return result;
+    return completer.future;
   }
+
+  // Future<List<double>?> _sendRequest(
+  //   Uint8List yuvBytes,
+  //   int width,
+  //   int height,
+  //   Face face,
+  //   int rotation,
+  //   int type, [
+  //   int targetSize = 112,
+  // ]) async {
+  //   if (!_isReady) return null;
+
+  //   final completer = Completer<List<double>?>();
+  //   int reqId = _nextRequestId++;
+  //   _pendingRequests[reqId] = completer;
+
+  //   final landmarksData = _extractLandmarks(face);
+  //   if (landmarksData == null) {
+  //     _pendingRequests.remove(reqId);
+  //     return null;
+  //   }
+
+  //   final transferableYuv = TransferableTypedData.fromList([yuvBytes]);
+
+  //   _sendPort.send([
+  //     reqId,
+  //     transferableYuv,
+  //     width,
+  //     height,
+  //     landmarksData,
+  //     rotation,
+  //     type, // Thêm type vào cuối
+  //     targetSize,
+  //   ]);
+
+  //   final result = await completer.future;
+  //   return result;
+  // }
 
   // Hủy Isolate khi thoát app
   void dispose() {
@@ -114,45 +174,50 @@ class FaceIsolateService {
     FaceProcessorNative.init();
 
     port.listen((message) {
-      if (message is List) {
-        int reqId = message[0]; // Nhận ID
-        try {
-          final Uint8List bytes = message[1];
-          final int width = message[2];
-          final int height = message[3];
-          final List<double> landmarks = message[4]; // Nhận list landmarks
-          final int rotation = message[5];
-          final int type = message[6];
+      if (message is! List) return;
 
-          List<double>? result;
+      int reqId = message[0]; // Nhận ID
+      final int address = message[1];
+      final int width = message[2];
+      final int height = message[3];
+      final int yStride = message[4];
+      final int uvStride = message[5];
+      final List<double> landmarks = message[6]; // Nhận list landmarks
+      final int rectX = message[7];
+      final int rectY = message[8];
+      final int rectW = message[9];
+      final int rectH = message[10];
+      final int rotation = message[11];
+      final int spoofModelType = message[12];
+      final int spoofTargetSize = message[13];
 
-          if (type == 0) {
-            // Gọi hàm 112x112 (Recog)
-            result = FaceProcessorNative.processWithRawLandmarks(
-              bytes,
-              width,
-              height,
-              landmarks,
-              rotation,
-            );
-          } else {
-            // Gọi hàm 80x80 (Spoof) - Cần viết thêm hàm này trong FaceProcessorNative
-            // Hoặc dùng hàm chung nếu C++ hỗ trợ tham số size
-            result = FaceProcessorNative.processAntiSpoofRaw(
-              bytes,
-              width,
-              height,
-              landmarks,
-              rotation,
-            );
-          }
+      try {
+        // debugPrint("Địa chỉ YUV nhận trong isolate listen: $address");
+        final Pointer<Uint8> ptrYuv = Pointer<Uint8>.fromAddress(address);
+        // debugPrint("Worker processing pointer: ${ptrYuv.address}");
 
-          // Trả về: [ID, Dữ liệu]
-          mainSendPort.send([reqId, result]);
-        } catch (e) {
-          debugPrint("Worker Error: $e");
-          mainSendPort.send([reqId, null]);
-        }
+        final result = FaceProcessorNative.processDualTask(
+          ptrYuv: ptrYuv,
+          width: width,
+          height: height,
+          yStride: yStride,
+          uvStride: uvStride,
+          landmarks: landmarks,
+          rotation: rotation,
+          rectX: rectX,
+          rectY: rectY,
+          rectW: rectW,
+          rectH: rectH,
+          spoofWidth: spoofTargetSize,
+          spoofHeight: spoofTargetSize,
+          spoofModelType: spoofModelType,
+        );
+
+        // Trả về: [ID, Dữ liệu]
+        mainSendPort.send([reqId, result]);
+      } catch (e) {
+        debugPrint("Worker Error: $e");
+        mainSendPort.send([reqId, null]);
       }
     });
   }
@@ -192,5 +257,20 @@ class FaceIsolateService {
     }
 
     return list;
+  }
+
+  void stop() {
+    _isReady = false;
+
+    // 1. Kết thúc tất cả các yêu cầu đang đợi với một lỗi
+    _pendingRequests.forEach((id, completer) {
+      if (!completer.isCompleted) {
+        completer.completeError("Isolate stopped");
+      }
+    });
+    _pendingRequests.clear();
+
+    // 2. Kill isolate
+    _isolate.kill(priority: Isolate.immediate);
   }
 }
