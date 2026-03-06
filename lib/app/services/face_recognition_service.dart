@@ -113,32 +113,32 @@ class FaceRecognitionService extends GetxService {
   Future<void> _syncDatabase() async {
     _faceDatabase.clear();
 
-    // // TRƯỜNG HỢP 1: Đã có dữ liệu trong Hive (Từ lần chạy thứ 2 trở đi)
-    // if (_hiveBox.isNotEmpty) {
-    //   AppLog.info("📂 Đang sử dụng dữ liệu từ Hive (Disk)...");
-    //   int conflictCount = 0;
+    // TRƯỜNG HỢP 1: Đã có dữ liệu trong Hive (Từ lần chạy thứ 2 trở đi)
+    if (_hiveBox.isNotEmpty) {
+      AppLog.info("📂 Đang sử dụng dữ liệu từ Hive (Disk)...");
+      int conflictCount = 0;
 
-    //   for (var key in _hiveBox.keys) {
-    //     // Ép kiểu dynamic về List<double> an toàn
-    //     final rawList = _hiveBox.get(key);
-    //     if (rawList is List) {
-    //       List<double> vector = List<double>.from(rawList);
+      for (var key in _hiveBox.keys) {
+        // Ép kiểu dynamic về List<double> an toàn
+        final rawList = _hiveBox.get(key);
+        if (rawList is List) {
+          List<double> vector = List<double>.from(rawList);
 
-    //       if (vector.length == _outputSize) {
-    //         _faceDatabase[key.toString()] = vector;
-    //       } else {
-    //         conflictCount++;
-    //       }
-    //     }
-    //   }
-    //   AppLog.info("📂 Đã load ${_faceDatabase.length} khuôn mặt từ Hive.");
-    //   if (conflictCount > 0) {
-    //     AppLog.warning(
-    //       "⚠️ CẢNH BÁO: Bỏ qua $conflictCount khuôn mặt do sai kích thước vector (Cần xóa DB cũ hoặc dùng đúng model).",
-    //     );
-    //   }
-    //   return;
-    // }
+          if (vector.length == _outputSize) {
+            _faceDatabase[key.toString()] = vector;
+          } else {
+            conflictCount++;
+          }
+        }
+      }
+      AppLog.info("📂 Đã load ${_faceDatabase.length} khuôn mặt từ Hive.");
+      if (conflictCount > 0) {
+        AppLog.warning(
+          "⚠️ CẢNH BÁO: Bỏ qua $conflictCount khuôn mặt do sai kích thước vector (Cần xóa DB cũ hoặc dùng đúng model).",
+        );
+      }
+      return;
+    }
 
     // TRƯỜNG HỢP 2: Hive chưa có gì (Lần chạy đầu tiên) -> Đọc JSON"
     AppLog.info(

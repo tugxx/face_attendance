@@ -18,7 +18,7 @@ import '../../app/services/face_isolate_service.dart';
 
 class FaceRegisterController extends GetxController {
   CameraController? cameraController;
-  final FaceRecognitionService _aiService = FaceRecognitionService();
+  final FaceRecognitionService _aiService = Get.find<FaceRecognitionService>();
   final FaceIsolateService _isolateRegistrationService =
       Get.find<FaceIsolateService>();
   late FaceDetector _faceDetector;
@@ -62,7 +62,7 @@ class FaceRegisterController extends GetxController {
   var scanProgress = 0.0.obs;
 
   // Trả về điểm số độ nét. Điểm càng cao ảnh càng sắc nét.
-  double _calculateSharpness(CameraImage image, Face face) {
+  (double, double) _calculateFaceQuality(CameraImage image, Face face) {
     try {
       final yPlane = image.planes[0].bytes;
       final width = image.width;
@@ -74,10 +74,11 @@ class FaceRegisterController extends GetxController {
       int right = face.boundingBox.right.toInt().clamp(0, width - 1);
       int bottom = face.boundingBox.bottom.toInt().clamp(0, height - 1);
 
-      if (right <= left || bottom <= top) return 0.0;
+      if (right <= left || bottom <= top) return (0.0, 0.0);
 
-      int sum = 0;
-      int sumSq = 0;
+      int sumLaplacian = 0;
+      int sumSqLaplacian = 0;
+      int sumBrightness = 0;
       int count = 0;
 
       // Tính Laplacian: L(x,y) = 4*I(x,y) - I(x-1,y) - I(x+1,y) - I(x,y-1) - I(x,y+1)
@@ -86,28 +87,34 @@ class FaceRegisterController extends GetxController {
         for (int x = left + 1; x < right - 1; x += 2) {
           int idx = y * width + x;
 
+          // 1. Tính độ sáng pixel hiện tại
+          int pixelValue = yPlane[idx];
+          sumBrightness += pixelValue;
+
           // Lấy giá trị pixel hiện tại và 4 pixel xung quanh
           int val =
-              (4 * yPlane[idx]) -
+              (4 * pixelValue) -
               yPlane[idx - 1] -
               yPlane[idx + 1] -
               yPlane[idx - width] -
               yPlane[idx + width];
 
-          sum += val;
-          sumSq += val * val;
+          sumLaplacian += val;
+          sumSqLaplacian += val * val;
           count++;
         }
       }
 
-      if (count == 0) return 0.0;
+      if (count == 0) return (0.0, 0.0);
 
-      double mean = sum / count;
-      double variance = (sumSq / count) - (mean * mean);
+      double meanLap = sumLaplacian / count;
+      double sharpness = (sumSqLaplacian / count) - (meanLap * meanLap);
 
-      return variance;
+      double meanBrightness = sumBrightness / count;
+
+      return (sharpness, meanBrightness);
     } catch (e) {
-      return 0.0;
+      return (0.0, 0.0);
     }
   }
 
@@ -148,7 +155,7 @@ class FaceRegisterController extends GetxController {
     // Lấy cạnh ngắn nhất của bức ảnh (chiều rộng màn hình)
     final shortEdge = min(imageWidth, imageHeight);
 
-    // Khung Oval của ta chiếm 70% màn hình.
+    // Khung Oval chiếm 70% màn hình.
     // -> Mặt lý tưởng nhất nên chiếm khoảng 40% đến 60% màn hình.
     final minFaceWidth = shortEdge * 0.40; // Mặt quá nhỏ
     final maxFaceWidth = shortEdge * 0.60; // Mặt quá to (tràn Oval)
@@ -167,10 +174,27 @@ class FaceRegisterController extends GetxController {
     }
 
     // ✅ CHECK ĐỘ NÉT TRƯỚC KHI CHECK GÓC
-    double sharpnessScore = _calculateSharpness(image, face);
-    AppLog.info("Độ nét: $sharpnessScore");
+    final (sharpness, brightness) = _calculateFaceQuality(image, face);
 
-    if (sharpnessScore < 30.0) {
+    // Cảnh báo nếu môi trường tối thui (Tránh AI nhận diện sai bét)
+    if (brightness < 40.0) {
+      faceInstruction.value = "Môi trường quá TỐI, vui lòng tìm nơi sáng hơn!";
+      frameColor.value = Colors.orangeAccent;
+      return false;
+    }
+
+    // ✅ THUẬT TOÁN NGƯỠNG ĐỘNG (DYNAMIC THRESHOLD)
+    // Ánh sáng 255 (Max) -> Ngưỡng đòi hỏi = 35.0
+    // Ánh sáng 50 (Tối) -> Ngưỡng đòi hỏi = 12.0
+    double dynamicThreshold = (brightness / 255.0) * 35.0;
+
+    dynamicThreshold = dynamicThreshold.clamp(12.0, 35.0);
+
+    AppLog.info(
+      "Sáng: ${brightness.toStringAsFixed(1)} | Nét: ${sharpness.toStringAsFixed(1)} | Ngưỡng yêu cầu: ${dynamicThreshold.toStringAsFixed(1)}",
+    );
+
+    if (sharpness < dynamicThreshold) {
       faceInstruction.value = "Ảnh bị mờ, hãy giữ yên hoặc lau ống kính!";
       frameColor.value =
           Colors.yellowAccent; // Hoặc dùng màu vàng cho khác biệt
@@ -280,10 +304,10 @@ class FaceRegisterController extends GetxController {
       isInitialized.value = false;
       errorMsg.value = "";
 
-      // 2. Khởi tạo Service AI
-      // Bước này quan trọng để đảm bảo Database và Model đã nạp vào RAM
-      // Nếu không có bước này, lúc bấm lưu sẽ bị lỗi null
-      await _aiService.initialize();
+      // // 2. Khởi tạo Service AI
+      // // Bước này quan trọng để đảm bảo Database và Model đã nạp vào RAM
+      // // Nếu không có bước này, lúc bấm lưu sẽ bị lỗi null
+      // await _aiService.initialize();
 
       // 3. Cấu hình Face Detector (ML Kit)
       // Với chức năng ĐĂNG KÝ, ta cần độ chính xác cao nhất (Accurate)
