@@ -5,6 +5,8 @@ import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 
+import '../../app/services/log_service.dart';
+
 class CameraUtils {
   // Đặt private constructor để ngăn khởi tạo class này (CameraUtils() -> Lỗi)
   // Vì đây là class tiện ích chỉ chứa hàm static.
@@ -86,7 +88,7 @@ class CameraUtils {
         } else {
           // Fallback: Nếu không phải NV21 chuẩn, tạm thời để trống vùng UV (Ảnh đen trắng)
           // để tránh crash, vì việc ghép tay U và V riêng lẻ rất tốn CPU.
-          debugPrint("⚠️ Warning: Camera format not generic NV21.");
+          AppLog.warning("⚠️ Warning: Camera format not generic NV21.");
         }
       }
       // --- TRƯỜNG HỢP 2: iOS / Một số máy Android (1 Plane) ---
@@ -130,7 +132,7 @@ class CameraUtils {
         }
       }
     } catch (e) {
-      debugPrint("⚠️ Lỗi copy bytes: $e");
+      AppLog.warning("⚠️ Lỗi copy bytes: $e");
       // Trả về buffer rỗng
       return Uint8List(targetSize);
     }

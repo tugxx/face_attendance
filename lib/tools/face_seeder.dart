@@ -11,6 +11,7 @@
 // import 'package:archive/archive.dart';
 
 // import '../app/types/face_progress.dart';
+// import '../app/services/log_service.dart';
 // import 'model_service.dart';
 
 // class FaceSeeder extends StatefulWidget {
@@ -54,9 +55,9 @@
 //   //     File(
 //   //       '${debugDir.path}/${name}_${DateTime.now().millisecondsSinceEpoch}.jpg',
 //   //     ).writeAsBytes(img.encodeJpg(imgOut));
-//   //     debugPrint("📸 Saved Debug Crop: $path");
+//   //     AppLog.info("📸 Saved Debug Crop: $path");
 //   //   } catch (e) {
-//   //     debugPrint("Lỗi save debug: $e");
+//   //     AppLog.error("Lỗi save debug: $e");
 //   //   }
 //   // }
 
@@ -109,7 +110,7 @@
 //       // 2. Giải nén
 //       final archive = ZipDecoder().decodeBytes(buffer);
 
-//       debugPrint("📦 Đã tìm thấy ${archive.length} file trong Zip.");
+//       AppLog.info("📦 Đã tìm thấy ${archive.length} file trong Zip.");
 
 //       // 3. Duyệt từng file trong file Zip
 //       for (final file in archive) {
@@ -135,7 +136,7 @@
 //           // Logic an toàn: Lấy tên thư mục chứa file
 //           String name = parts[parts.length - 2];
 
-//           debugPrint("⚡ Đang xử lý: $name - ${filename.split('/').last}");
+//           AppLog.info("⚡ Đang xử lý: $name - ${filename.split('/').last}");
 
 //           // A. Ghi file ra bộ nhớ tạm (Cache) để ML Kit đọc
 //           final tempDir = await getTemporaryDirectory();
@@ -164,7 +165,7 @@
 //         }
 //       });
 
-//       debugPrint("✅ Đã xử lý xong ${finalJsonData.length} người dùng!");
+//       AppLog.info("✅ Đã xử lý xong ${finalJsonData.length} người dùng!");
 
 //       // --- SAU KHI XỬ LÝ XONG TẤT CẢ ẢNH ---
 //       stopwatch.stop();
@@ -185,7 +186,7 @@
 //         final byteData = await rootBundle.load(ToolAIService.modelPath);
 //         modelSizeMB = byteData.lengthInBytes / (1024 * 1024);
 //       } catch (e) {
-//         debugPrint("Không lấy được size model: $e");
+//         AppLog.error("Không lấy được size model: $e");
 //       }
 
 //       // 4. TẠO JSON BÁO CÁO (Cái bạn cần đây)
@@ -230,7 +231,7 @@
 //       String dbFileName = "db_$safeModelName.json";
 //       await _sendToServer(dbJsonString, filename: dbFileName);
 //     } catch (e) {
-//       debugPrint("❌ Lỗi: $e");
+//       AppLog.error("❌ Lỗi: $e");
 //     } finally {
 //       setState(() {
 //         _isProcessing = false;
@@ -279,7 +280,7 @@
 
 //       // if ((mainFace.headEulerAngleY ?? 0).abs() > 20 ||
 //       //     (mainFace.headEulerAngleZ ?? 0).abs() > 20) {
-//       //   debugPrint("⚠️ Bỏ qua $name: Mặt nghiêng quá mức.");
+//       //     AppLog.warning("⚠️ Bỏ qua $name: Mặt nghiêng quá mức.");
 //       //   return;
 //       // }
 
@@ -294,7 +295,7 @@
 
 //         // Nếu mặt nhỏ hơn 10% chiều rộng ảnh (hoặc bạn có thể set cứng > 80px)
 //         if (faceWidth < (imageWidth * minFacePercent)) {
-//           debugPrint(
+//           AppLog.warning(
 //             "⚠️ Bỏ qua $name: Mặt quá nhỏ (${faceWidth.toInt()}px / ${imageWidth.toInt()}px)",
 //           );
 //           return;
@@ -326,7 +327,7 @@
 //         }
 //       }
 //     } catch (e) {
-//       debugPrint("⚠️ Lỗi xử lý ảnh batch: $e");
+//       AppLog.error("⚠️ Lỗi xử lý ảnh batch: $e");
 //     } finally {
 //       // Dọn dẹp file tạm
 //       if (smallPath != null) {
@@ -340,7 +341,7 @@
 //   }
 
 //   Map<String, double> _validateDataQuality() {
-//     debugPrint("\n--- 🕵️ BẮT ĐẦU KIỂM TRA CHẤT LƯỢNG DỮ LIỆU ---");
+//     AppLog.info("\n--- 🕵️ BẮT ĐẦU KIỂM TRA CHẤT LƯỢNG DỮ LIỆU ---");
 
 //     double totalIntraSim = 0;
 //     int intraCount = 0;
@@ -348,7 +349,7 @@
 //     // 1. KIỂM TRA ĐỘ ỔN ĐỊNH (Cùng 1 người, các ảnh có giống nhau không?)
 //     tempMapEmbeddings.forEach((name, embeddings) {
 //       if (embeddings.length < 2) {
-//         debugPrint("⚠️ $name: Chỉ có 1 ảnh -> Không thể kiểm tra độ ổn định.");
+//         AppLog.warning("⚠️ $name: Chỉ có 1 ảnh -> Không thể kiểm tra độ ổn định.");
 //         return;
 //       }
 
@@ -375,7 +376,7 @@
 //       String quality = avgSim > 0.8
 //           ? "✅ Tốt"
 //           : (avgSim > 0.6 ? "⚠️ Tạm" : "❌ KHÔNG ỔN ĐỊNH");
-//       debugPrint(
+//       AppLog.info(
 //         "👤 $name ($count cặp ảnh): Trung bình sai số = ${avgSim.toStringAsFixed(3)} -> $quality",
 //       );
 //     });
@@ -383,13 +384,13 @@
 //     double avgIntra = intraCount > 0 ? totalIntraSim / intraCount : 0.0;
 
 //     if (intraCount > 0) {
-//       debugPrint(
+//       AppLog.info(
 //         "=> Sai số nội bộ trung bình toàn data: ${avgIntra.toStringAsFixed(3)}",
 //       );
 //     }
 
 //     // 2. KIỂM TRA ĐỘ PHÂN BIỆT (Người A có khác người B không?)
-//     debugPrint("\n--- ⚔️ KIỂM TRA PHÂN BIỆT GIỮA CÁC NGƯỜI DÙNG ---");
+//     AppLog.info("\n--- ⚔️ KIỂM TRA PHÂN BIỆT GIỮA CÁC NGƯỜI DÙNG ---");
 //     List<String> names = tempMapEmbeddings.keys.toList();
 
 //     // Tính vector trung bình tạm thời để so sánh
@@ -426,7 +427,7 @@
 //         }
 
 //         // IN RA TẤT CẢ CÁC CẶP (Theo yêu cầu của bạn)
-//         debugPrint(
+//         AppLog.info(
 //           "$statusIcon $u1 vs $u2: Sim = ${sim.toStringAsFixed(3)} $note",
 //         );
 //       }
@@ -436,8 +437,8 @@
 
 //     // --- PHẦN BỔ SUNG ĐỂ HẾT LỖI VÀ BÁO CÁO TỔNG QUAN ---
 //     if (interCount > 0) {
-//       debugPrint("--------------------------------------------------");
-//       debugPrint(
+//       AppLog.info("--------------------------------------------------");
+//       AppLog.info(
 //         "=> Khoảng cách tách biệt trung bình: ${avgInter.toStringAsFixed(3)}",
 //       );
 
@@ -445,16 +446,16 @@
 //       double margin = avgIntra - avgInter;
 
 //       if (margin > 0.4) {
-//         debugPrint(
+//         AppLog.info(
 //           "🌟 TỔNG KẾT: Model phân biệt RẤT TỐT! (Margin: ${margin.toStringAsFixed(2)})",
 //         );
 //       } else if (margin > 0.2) {
-//         debugPrint("✅ TỔNG KẾT: Model hoạt động ỔN.");
+//         AppLog.info("✅ TỔNG KẾT: Model hoạt động ỔN.");
 //       } else {
-//         debugPrint("⚠️ TỔNG KẾT: Cảnh báo, dữ liệu khó phân biệt.");
+//         AppLog.warning("⚠️ TỔNG KẾT: Cảnh báo, dữ liệu khó phân biệt.");
 //       }
 //     }
-//     debugPrint("--------------------------------------------------\n");
+//     AppLog.info("--------------------------------------------------\n");
 
 //     return {
 //       "intra_sim": avgIntra,
@@ -478,7 +479,7 @@
 //     String jsonString, {
 //     String filename = "face_db.json",
 //   }) async {
-//     debugPrint("📡 Đang gửi dữ liệu về máy tính...");
+//     AppLog.info("📡 Đang gửi dữ liệu về máy tính...");
 
 //     // Khởi tạo Dio
 //     final dio = Dio();
@@ -498,13 +499,13 @@
 //       );
 
 //       if (response.statusCode == 200) {
-//         debugPrint("🎉 THÀNH CÔNG! File json đã nằm trong assets máy tính.");
+//         AppLog.info("🎉 THÀNH CÔNG! File json đã nằm trong assets máy tính.");
 //       } else {
-//         debugPrint("⚠️ Server lỗi: ${response.statusCode}");
+//         AppLog.error("⚠️ Server lỗi: ${response.statusCode}");
 //       }
 //     } catch (e) {
-//       debugPrint("❌ Không kết nối được: $e");
-//       debugPrint(
+//       AppLog.error("❌ Không kết nối được: $e");
+//       AppLog.info(
 //         "👉 Kiểm tra lại IP máy tính và đảm bảo Server Dart đang chạy.",
 //       );
 //     }

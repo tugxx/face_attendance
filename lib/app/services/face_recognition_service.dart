@@ -2,10 +2,13 @@ import 'dart:math';
 import 'dart:convert';
 // import 'dart:io';
 
+import 'package:get/get.dart';
 import 'package:flutter/foundation.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:flutter/services.dart';
+
+import '../services/log_service.dart';
 
 class RecognitionResult {
   final String name;
@@ -15,7 +18,7 @@ class RecognitionResult {
   RecognitionResult(this.name, this.distance, this.isUnknown);
 }
 
-class FaceRecognitionService {
+class FaceRecognitionService extends GetxService {
   // --- SINGLETON PATTERN --- (Chỉ tạo 1 instance duy nhất trong app)
   static final FaceRecognitionService _instance =
       FaceRecognitionService._internal();
@@ -47,7 +50,7 @@ class FaceRecognitionService {
   /// Khởi tạo Service
   Future<void> initialize() async {
     try {
-      // debugPrint("🚀 Bắt đầu khởi tạo FaceRecognitionService...");
+      // AppLog.info("🚀 Bắt đầu khởi tạo FaceRecognitionService...");
 
       // Khởi tạo Database (Hive)
       await Hive.initFlutter();
@@ -59,11 +62,11 @@ class FaceRecognitionService {
       // 3. Sync Database (Truyền size vào để kiểm tra tính hợp lệ)
       await _syncDatabase();
 
-      // debugPrint(
-      //   "✅ FaceRecognitionService sẵn sàng! (Model: $_outputSize dim)",
-      // );
+      AppLog.info(
+        "✅ FaceRecognitionService sẵn sàng! (Model: $_outputSize dim)",
+      );
     } catch (e) {
-      // debugPrint("❌ Lỗi Fatal Initialize: $e");
+      AppLog.error("❌ Lỗi Fatal Initialize: $e");
     }
   }
 
@@ -97,11 +100,11 @@ class FaceRecognitionService {
 
       _outputSize = outputShape.reduce((a, b) => a * b);
 
-      // debugPrint("🧠 Model Loaded: $_modelPath");
-      // debugPrint("   -> Input: ${_inputWidth}x$_inputHeight");
-      // debugPrint("   -> Output Vector: $_outputSize");
+      // AppLog.info("🧠 Model Loaded: $_modelPath");
+      // AppLog.info("   -> Input: ${_inputWidth}x$_inputHeight");
+      // AppLog.info("   -> Output Vector: $_outputSize");
     } catch (e) {
-      // debugPrint("❌ Không load được Model tại $_modelPath: $e");
+      AppLog.error("❌ Không load được Model tại $_modelPath: $e");
       throw Exception("Model load failed");
     }
   }
@@ -110,41 +113,41 @@ class FaceRecognitionService {
   Future<void> _syncDatabase() async {
     _faceDatabase.clear();
 
-    // TRƯỜNG HỢP 1: Đã có dữ liệu trong Hive (Từ lần chạy thứ 2 trở đi)
-    if (_hiveBox.isNotEmpty) {
-      // debugPrint("📂 Đang sử dụng dữ liệu từ Hive (Disk)...");
-      int conflictCount = 0;
+    // // TRƯỜNG HỢP 1: Đã có dữ liệu trong Hive (Từ lần chạy thứ 2 trở đi)
+    // if (_hiveBox.isNotEmpty) {
+    //   AppLog.info("📂 Đang sử dụng dữ liệu từ Hive (Disk)...");
+    //   int conflictCount = 0;
 
-      for (var key in _hiveBox.keys) {
-        // Ép kiểu dynamic về List<double> an toàn
-        final rawList = _hiveBox.get(key);
-        if (rawList is List) {
-          List<double> vector = List<double>.from(rawList);
+    //   for (var key in _hiveBox.keys) {
+    //     // Ép kiểu dynamic về List<double> an toàn
+    //     final rawList = _hiveBox.get(key);
+    //     if (rawList is List) {
+    //       List<double> vector = List<double>.from(rawList);
 
-          if (vector.length == _outputSize) {
-            _faceDatabase[key.toString()] = vector;
-          } else {
-            conflictCount++;
-          }
-        }
-      }
-      // debugPrint("📂 Đã load ${_faceDatabase.length} khuôn mặt từ Hive.");
-      if (conflictCount > 0) {
-        // debugPrint(
-        //   "⚠️ CẢNH BÁO: Bỏ qua $conflictCount khuôn mặt do sai kích thước vector (Cần xóa DB cũ hoặc dùng đúng model).",
-        // );
-      }
-      return;
-    }
+    //       if (vector.length == _outputSize) {
+    //         _faceDatabase[key.toString()] = vector;
+    //       } else {
+    //         conflictCount++;
+    //       }
+    //     }
+    //   }
+    //   AppLog.info("📂 Đã load ${_faceDatabase.length} khuôn mặt từ Hive.");
+    //   if (conflictCount > 0) {
+    //     AppLog.warning(
+    //       "⚠️ CẢNH BÁO: Bỏ qua $conflictCount khuôn mặt do sai kích thước vector (Cần xóa DB cũ hoặc dùng đúng model).",
+    //     );
+    //   }
+    //   return;
+    // }
 
     // TRƯỜNG HỢP 2: Hive chưa có gì (Lần chạy đầu tiên) -> Đọc JSON"
-    // debugPrint(
-    //   "✨ Lần chạy đầu tiên (Hive rỗng). Bắt đầu khởi tạo dữ liệu từ JSON...",
-    // );
+    AppLog.info(
+      "✨ Lần chạy đầu tiên (Hive rỗng). Bắt đầu khởi tạo dữ liệu từ JSON...",
+    );
     try {
       final String jsonString = await rootBundle.loadString(_dbPath);
       if (jsonString.isEmpty) {
-        // debugPrint("⚠️ File JSON rỗng, không có dữ liệu mẫu.");
+        AppLog.warning("⚠️ File JSON rỗng, không có dữ liệu mẫu.");
         return;
       }
 
@@ -160,9 +163,9 @@ class FaceRecognitionService {
         }
       });
 
-      // debugPrint("🔄 Đã nạp ${_faceDatabase.length} khuôn mặt.");
+      AppLog.info("🔄 Đã nạp ${_faceDatabase.length} khuôn mặt.");
     } catch (e) {
-      // debugPrint("⚠️ Lỗi load JSON: $e");
+      AppLog.error("⚠️ Lỗi load JSON: $e");
     }
   }
 
@@ -174,11 +177,11 @@ class FaceRecognitionService {
 
     double expectedSize = _inputHeight * _inputWidth * _channels.toDouble();
     if (inputTensor.length != expectedSize) {
-      // debugPrint(
-      //   "🛑 LỖI INPUT MODEL: Kích thước sai lệch! "
-      //   "Nhận được ${inputTensor.length}, nhưng Model cần $expectedSize.\n"
-      //   "-> Có thể lỗi tại bước FaceAligner.",
-      // );
+      AppLog.warning(
+        "🛑 LỖI INPUT MODEL: Kích thước sai lệch! "
+        "Nhận được ${inputTensor.length}, nhưng Model cần $expectedSize.\n"
+        "-> Có thể lỗi tại bước FaceAligner.",
+      );
       // Trả về rỗng để Controller biết và bỏ qua frame này
       return [];
     }
@@ -236,9 +239,10 @@ class FaceRecognitionService {
 
       // 5. L2 Normalize (Bắt buộc để tính độ chính xác cao)
       return _l2Normalize(resultVector);
-    } catch (e  /*, stack*/) {
-      // debugPrint("❌ Error in _getEmbedding: $e");
-      // debugPrintStack(stackTrace: stack);
+    } catch (e, stack) {
+      AppLog.error("❌ Error in _getEmbedding: $e");
+
+      AppLog.error("Stack trace: $stack");
       // Trả về vector 0 nếu lỗi để không crash app
       return [];
     }
@@ -258,7 +262,7 @@ class FaceRecognitionService {
       // 3. TÌM NGƯỜI TRONG DATABASE
       return _findClosestMatch(embedding);
     } catch (e) {
-      // debugPrint("❌ Lỗi khi predict: $e");
+      AppLog.error("❌ Lỗi khi predict: $e");
       return RecognitionResult("Error", 0.0, true);
     }
   }
@@ -282,7 +286,7 @@ class FaceRecognitionService {
 
     _faceDatabase.forEach((key, dbEmbedding) {
       double score = _cosineSimilarity(embedding, dbEmbedding);
-      // debugPrint("   Checking $key: $score"); // Uncomment để debug chi tiết
+      // AppLog.info("   Checking $key: $score"); // Uncomment để debug chi tiết
       if (score > maxScore) {
         maxScore = score;
         name = key;
@@ -309,12 +313,12 @@ class FaceRecognitionService {
 
   Future<bool> register(String name, List<double> inputTensor) async {
     if (_interpreter == null) {
-      // debugPrint("⚠️ Lỗi: Model chưa khởi tạo.");
+      AppLog.warning("⚠️ Lỗi: Model chưa khởi tạo.");
       return false;
     }
 
     if (inputTensor.isEmpty) {
-      // debugPrint("⚠️ Lỗi: Dữ liệu đầu vào rỗng, không thể đăng ký.");
+      AppLog.warning("⚠️ Lỗi: Dữ liệu đầu vào rỗng, không thể đăng ký.");
       return false;
     }
 
@@ -323,7 +327,7 @@ class FaceRecognitionService {
       List<double> embedding = await _getEmbedding(inputTensor);
 
       if (embedding.isEmpty || embedding.length != _outputSize) {
-        // debugPrint("❌ Lỗi: AI không tạo được vector hợp lệ. Hủy đăng ký.");
+        AppLog.warning("⚠️ Lỗi: AI không tạo được vector hợp lệ. Hủy đăng ký.");
         return false;
       }
 
@@ -333,12 +337,12 @@ class FaceRecognitionService {
       // 3. Lưu vào Hive (Disk)
       await _hiveBox.put(name, embedding);
 
-      // debugPrint(
-      //   "✅ Đã đăng ký thành công: $name (Vector size: ${embedding.length})",
-      // );
+      AppLog.info(
+        "✅ Đã đăng ký thành công: $name (Vector size: ${embedding.length})",
+      );
       return true;
     } catch (e) {
-      // debugPrint("❌ Lỗi đăng ký: $e");
+      AppLog.error("❌ Lỗi đăng ký: $e");
       return false;
     }
   }
@@ -352,7 +356,9 @@ class FaceRecognitionService {
       List<double> newEmbedding = await _getEmbedding(inputTensor);
 
       if (newEmbedding.isEmpty || newEmbedding.length != _outputSize) {
-        // debugPrint("❌ Lỗi update: AI trả về vector rỗng hoặc sai kích thước.");
+        AppLog.warning(
+          "⚠️ Lỗi update: AI trả về vector rỗng hoặc sai kích thước.",
+        );
         return false;
       }
 
@@ -360,14 +366,14 @@ class FaceRecognitionService {
       List<double>? oldEmbedding = _faceDatabase[name];
 
       if (oldEmbedding == null) {
-        // debugPrint(
-        //   "ℹ️ Chưa có dữ liệu cũ của $name -> Chuyển sang đăng ký mới.",
-        // );
+        AppLog.info(
+          "ℹ️ Chưa có dữ liệu cũ của $name -> Chuyển sang đăng ký mới.",
+        );
         return register(name, inputTensor);
       }
 
       if (oldEmbedding.length != newEmbedding.length) {
-        // debugPrint(
+        // AppLog.warning(
         //   "⚠️ Lỗi phiên bản Model: Data cũ (${oldEmbedding.length}) khác Data mới (${newEmbedding.length}).\n"
         //   "👉 Ghi đè lại bằng dữ liệu mới!",
         // );
@@ -391,10 +397,10 @@ class FaceRecognitionService {
       _faceDatabase[name] = mergedEmbedding;
       await _hiveBox.put(name, mergedEmbedding);
 
-      // debugPrint("♻️ Đã cập nhật vector cho: $name");
+      AppLog.info("♻️ Đã cập nhật vector cho: $name");
       return true;
     } catch (e) {
-      // debugPrint("❌ Lỗi update: $e");
+      AppLog.error("❌ Lỗi update: $e");
       return false;
     }
   }

@@ -151,6 +151,8 @@ class FaceProcessorNative {
 
   static void init() {
     if (_lib != null) return;
+    // final sw = Stopwatch()..start(); // ⏱️ Bắt đầu đo
+
     // Tên thư viện phải khớp với CMakeLists (native_face)
     final libName = Platform.isAndroid
         ? 'libnative_face_align.so'
@@ -188,10 +190,13 @@ class FaceProcessorNative {
         AppLog.error("⚠️ Missing spoofing");
       }
 
-      AppLog.info("✅ Đã load thư viện C++ thành công: $libName");
+      // AppLog.info("✅ Đã load thư viện C++ thành công: $libName");
     } catch (e) {
       AppLog.error("❌ Lỗi load thư viện C++: $e");
     }
+
+    // sw.stop(); // ⏱️ Dừng đo
+    // AppLog.info("⏱️ Thời gian Load C++ thực tế: ${sw.elapsedMilliseconds}ms");
   }
 
   // --------------------------------------------------------
@@ -235,22 +240,25 @@ class FaceProcessorNative {
     return ptr;
   }
 
-  static List<double>? process(
-    Uint8List yuvBytes,
-    int width,
-    int height,
-    Face face,
-    int rotation,
-  ) {
+  static List<double>? processRegistration({
+    required Pointer<Uint8> ptrYuv,
+    required int width,
+    required int height,
+    required List<double> landmarks, // Nhận mảng số thực giống hệt Dual Task
+    required int rotation,
+  }) {
     if (_funcCamera == null) init();
     if (_funcCamera == null) return null;
 
-    final ptrLandmarks = _convertLandmarks(face);
-    if (ptrLandmarks == null) return null;
+    // 1. Chuyển List<double> landmarks thành Pointer<Float> cho C++
+    final Pointer<Float> ptrLandmarks = calloc<Float>(landmarks.length);
+    for (int i = 0; i < landmarks.length; i++) {
+      ptrLandmarks[i] = landmarks[i];
+    }
 
-    // 2. Cấp phát bộ nhớ cho YUV (Copy dữ liệu ảnh sang C++)
-    final Pointer<Uint8> ptrYuv = calloc<Uint8>(yuvBytes.length);
-    ptrYuv.asTypedList(yuvBytes.length).setAll(0, yuvBytes);
+    // // 2. Cấp phát bộ nhớ cho YUV (Copy dữ liệu ảnh sang C++)
+    // final Pointer<Uint8> ptrYuv = calloc<Uint8>(yuvBytes.length);
+    // ptrYuv.asTypedList(yuvBytes.length).setAll(0, yuvBytes);
 
     // 3. Chuẩn bị Output
     final int outLen = 112 * 112 * 3;
@@ -267,7 +275,7 @@ class FaceProcessorNative {
       AppLog.error("Native Error: $e");
       return null;
     } finally {
-      calloc.free(ptrYuv);
+      // calloc.free(ptrYuv);
       calloc.free(ptrLandmarks);
       calloc.free(ptrOut);
     }

@@ -1,8 +1,10 @@
 import 'dart:typed_data';
 import 'dart:math' as math;
 
-import 'package:flutter/material.dart';
+// import 'package:flutter/material.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
+
+import '../app/services/log_service.dart';
 
 class ToolAIService {
   Interpreter? _interpreter;
@@ -43,9 +45,9 @@ class ToolAIService {
       _channels = rawShape[3];
       _inputType = inputTensor.type;
 
-      debugPrint("🔍 Model Detected Shape: $rawShape");
-      debugPrint("   -> Height: $_inputHeight");
-      debugPrint("   -> Width: $_inputWidth");
+      AppLog.info("🔍 Model Detected Shape: $rawShape");
+      AppLog.info("   -> Height: $_inputHeight");
+      AppLog.info("   -> Width: $_inputWidth");
 
       _interpreter!.resizeInputTensor(0, [
         1,
@@ -66,11 +68,11 @@ class ToolAIService {
 
       _outputSize = outputShape.reduce((a, b) => a * b);
 
-      debugPrint("🧠 AI Model Loaded: $modelPath");
-      debugPrint("   - Input: ${_inputHeight}x$_inputWidth");
-      debugPrint("   - Input Type: $_inputType");
-      debugPrint("   - Quantization: Scale=$_scale, ZeroPoint=$_zeroPoint");
-      debugPrint("   - Output Vector: $_outputSize dimensions");
+      AppLog.info("🧠 AI Model Loaded: $modelPath");
+      AppLog.info("   - Input: ${_inputHeight}x$_inputWidth");
+      AppLog.info("   - Input Type: $_inputType");
+      AppLog.info("   - Quantization: Scale=$_scale, ZeroPoint=$_zeroPoint");
+      AppLog.info("   - Output Vector: $_outputSize dimensions");
 
       int bufferSize = 1 * _inputHeight * _inputWidth * _channels;
       Object inputBuffer;
@@ -104,21 +106,21 @@ class ToolAIService {
 
       _interpreter?.run(inputBuffer, outputBuffer);
 
-      debugPrint("🧠 AI Tool Model loaded. Output: $_outputSize");
+      AppLog.info("🧠 AI Tool Model loaded. Output: $_outputSize");
     } catch (e) {
-      debugPrint("❌ Error loading Model: $e");
+      AppLog.error("❌ Error loading Model: $e");
     }
   }
 
   Future<List<double>> generateEmbedding(List<double> inputPixels) async {
     if (_interpreter == null) {
-      debugPrint("⚠️ Model chưa init!");
+      AppLog.warning("⚠️ Model chưa init!");
       return [];
     }
 
     // Guard: Kiểm tra kích thước dữ liệu đầu vào có khớp không
     if (inputPixels.length != _inputHeight * _inputWidth * _channels) {
-      debugPrint(
+      AppLog.warning(
         "⚠️ Sai kích thước input! Nhận ${inputPixels.length}, cần ${_inputHeight * _inputWidth * _channels}",
       );
       return [];
@@ -198,7 +200,7 @@ class ToolAIService {
       // 5. L2 NORMALIZE (Bắt buộc)
       return _l2Normalize(rawEmbedding);
     } catch (e) {
-      debugPrint("❌ Error in generateEmbedding: $e");
+      AppLog.error("❌ Error in generateEmbedding: $e");
       return [];
     }
   }

@@ -1,4 +1,4 @@
-import 'dart:math';
+// import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
@@ -9,101 +9,108 @@ class FaceDetectorPainter extends CustomPainter {
   final Size absoluteImageSize; // Kích thước gốc của ảnh Camera
   final InputImageRotation rotation;
   final CameraLensDirection cameraLensDirection;
+  final Color boxColor;
 
   FaceDetectorPainter(
     this.faces,
     this.absoluteImageSize,
     this.rotation,
     this.cameraLensDirection,
+    this.boxColor,
   );
 
-  /// Hàm sửa lỗi 'undefined_method': Tính toán tọa độ X
-  /// Tự động xử lý lật gương (Mirror) nếu là Camera trước
-  double _translateX(
-    double x,
-    double scaleX,
-    Size size,
-    CameraLensDirection direction,
-  ) {
-    // Tọa độ thực trên màn hình
-    final double rawX = x * scaleX;
+  // /// Hàm sửa lỗi 'undefined_method': Tính toán tọa độ X
+  // /// Tự động xử lý lật gương (Mirror) nếu là Camera trước
+  // double _translateX(
+  //   double x,
+  //   double scaleX,
+  //   Size size,
+  //   CameraLensDirection direction,
+  // ) {
+  //   // Tọa độ thực trên màn hình
+  //   final double rawX = x * scaleX;
 
-    if (direction == CameraLensDirection.front) {
-      // Nếu là cam trước: Lấy chiều rộng màn hình trừ đi tọa độ (Lật trục X)
-      return size.width - rawX;
-    } else {
-      return rawX;
-    }
-  }
+  //   if (direction == CameraLensDirection.front) {
+  //     // Nếu là cam trước: Lấy chiều rộng màn hình trừ đi tọa độ (Lật trục X)
+  //     return size.width - rawX;
+  //   } else {
+  //     return rawX;
+  //   }
+  // }
 
-  /// Tính toán tọa độ Y
-  double _translateY(double y, double scaleY) {
-    return y * scaleY;
-  }
+  // /// Tính toán tọa độ Y
+  // double _translateY(double y, double scaleY) {
+  //   return y * scaleY;
+  // }
 
-  /// Hàm vẽ các điểm trên mặt (Mắt, mũi, miệng...)
-  void _paintContour(
-    Canvas canvas,
-    Paint paint,
-    Face face,
-    double scaleX,
-    double scaleY,
-    Size size,
-  ) {
-    // Danh sách các bộ phận muốn vẽ
-    final contoursToCheck = [
-      FaceContourType.face,
-      FaceContourType.leftEyebrowTop,
-      FaceContourType.rightEyebrowTop,
-      FaceContourType.leftEye,
-      FaceContourType.rightEye,
-      FaceContourType.noseBridge,
-      FaceContourType.upperLipTop,
-      FaceContourType.lowerLipBottom,
-    ];
+  // /// Hàm vẽ các điểm trên mặt (Mắt, mũi, miệng...)
+  // void _paintContour(
+  //   Canvas canvas,
+  //   Paint paint,
+  //   Face face,
+  //   double scaleX,
+  //   double scaleY,
+  //   Size size,
+  // ) {
+  //   // Danh sách các bộ phận muốn vẽ
+  //   final contoursToCheck = [
+  //     FaceContourType.face,
+  //     FaceContourType.leftEyebrowTop,
+  //     FaceContourType.rightEyebrowTop,
+  //     FaceContourType.leftEye,
+  //     FaceContourType.rightEye,
+  //     FaceContourType.noseBridge,
+  //     FaceContourType.upperLipTop,
+  //     FaceContourType.lowerLipBottom,
+  //   ];
 
-    for (final type in contoursToCheck) {
-      final contour = face.contours[type];
-      if (contour?.points != null) {
-        for (final Point point in contour!.points) {
-          canvas.drawCircle(
-            Offset(
-              _translateX(
-                point.x.toDouble(),
-                scaleX,
-                size,
-                cameraLensDirection,
-              ),
-              _translateY(point.y.toDouble(), scaleY),
-            ),
-            2, // Bán kính chấm tròn
-            paint,
-          );
-        }
-      }
-    }
-  }
+  //   for (final type in contoursToCheck) {
+  //     final contour = face.contours[type];
+  //     if (contour?.points != null) {
+  //       for (final Point point in contour!.points) {
+  //         canvas.drawCircle(
+  //           Offset(
+  //             _translateX(
+  //               point.x.toDouble(),
+  //               scaleX,
+  //               size,
+  //               cameraLensDirection,
+  //             ),
+  //             _translateY(point.y.toDouble(), scaleY),
+  //           ),
+  //           2, // Bán kính chấm tròn
+  //           paint,
+  //         );
+  //       }
+  //     }
+  //   }
+  // }
 
   @override
   void paint(Canvas canvas, Size size) {
     final Paint paint = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.0
-      ..color = Colors.greenAccent;
+      ..strokeWidth = 3.0
+      ..color = boxColor;
 
-      final Paint landmarkPaint = Paint()
-      ..style = PaintingStyle.fill
-      ..strokeWidth = 2.0
-      ..color = Colors.red;
+    // final Paint landmarkPaint = Paint()
+    //   ..style = PaintingStyle.fill
+    //   ..strokeWidth = 2.0
+    //   ..color = Colors.red;
 
     for (final Face face in faces) {
       // 1. Xác định kích thước ảnh thực tế sau khi xoay
       // Android: Ảnh gốc là Landscape (ngang), nhưng hiển thị Portrait (dọc) -> Cần đảo chiều
-      final bool isRotated = rotation == InputImageRotation.rotation90deg || 
-                             rotation == InputImageRotation.rotation270deg;
+      final bool isRotated =
+          rotation == InputImageRotation.rotation90deg ||
+          rotation == InputImageRotation.rotation270deg;
 
-      final double imageWidth = isRotated ? absoluteImageSize.height : absoluteImageSize.width;
-      final double imageHeight = isRotated ? absoluteImageSize.width : absoluteImageSize.height;
+      final double imageWidth = isRotated
+          ? absoluteImageSize.height
+          : absoluteImageSize.width;
+      final double imageHeight = isRotated
+          ? absoluteImageSize.width
+          : absoluteImageSize.height;
 
       // Logic chuyển đổi tọa độ từ ảnh gốc sang màn hình
       // size: Kích thước của Widget hiển thị trên màn hình (VD: 360x640)
@@ -137,20 +144,17 @@ class FaceDetectorPainter extends CustomPainter {
         right = size.width - tempLeft;
       }
 
-      canvas.drawRect(
-        Rect.fromLTRB(left, top, right, bottom),
-        paint,
-      );
+      canvas.drawRect(Rect.fromLTRB(left, top, right, bottom), paint);
 
-      // 3. Vẽ Landmark (Optional - Debug)
-      // Gọi hàm vẽ Contour để hết lỗi "unused_element"
-      _paintContour(canvas, landmarkPaint, face, scaleX, scaleY, size);
+      // // 3. Vẽ Landmark (Optional - Debug)
+      // _paintContour(canvas, landmarkPaint, face, scaleX, scaleY, size);
     }
   }
 
   @override
   bool shouldRepaint(FaceDetectorPainter oldDelegate) {
     return oldDelegate.absoluteImageSize != absoluteImageSize ||
-        oldDelegate.faces != faces;
+        oldDelegate.faces != faces ||
+        oldDelegate.boxColor != boxColor;
   }
 }

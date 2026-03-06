@@ -14,18 +14,7 @@ class FaceAttendanceView extends GetView<FaceAttendanceController> {
       backgroundColor: Colors.black,
 
       body: Obx(() {
-        // 1. Xử lý lỗi
-        if (controller.errorMsg.value.isNotEmpty) {
-          return Center(
-            child: Text(
-              controller.errorMsg.value,
-              style: const TextStyle(color: Colors.red),
-              textAlign: TextAlign.center,
-            ),
-          );
-        }
-
-        // 2. Màn hình Loading (Khi chưa init xong HOẶC camera chưa có)
+        // 1. Màn hình Loading (Khi chưa init xong HOẶC camera chưa có)
         if (!controller.isInitialized.value ||
             controller.cameraController == null) {
           return Container(
@@ -52,8 +41,23 @@ class FaceAttendanceView extends GetView<FaceAttendanceController> {
             CameraPreview(controller.cameraController!),
 
             // Layer 2: Vẽ khung
-            if (controller.detectedFaces.isNotEmpty)
-              SizedBox.expand(
+            Obx(() {
+              // Nếu không có mặt thì không vẽ gì cả
+              if (controller.detectedFaces.isEmpty ||
+                  controller.recognizedName.value != "Unknown") {
+                return const SizedBox.shrink();
+              }
+
+              // Quyết định màu viền
+              Color boundingBoxColor = Colors.greenAccent;
+              if (controller.errorMsg.value.isNotEmpty ||
+                  controller.isSpoofing.value) {
+                boundingBoxColor = Colors.redAccent; // Giả mạo -> Đỏ
+              } else if (controller.faceInstruction.value.isNotEmpty) {
+                boundingBoxColor = Colors.orangeAccent; // Nhắc nhở -> Cam
+              }
+
+              return SizedBox.expand(
                 child: CustomPaint(
                   painter: FaceDetectorPainter(
                     controller.detectedFaces.toList(),
@@ -69,12 +73,88 @@ class FaceAttendanceView extends GetView<FaceAttendanceController> {
                         ) ??
                         InputImageRotation.rotation0deg,
                     controller.cameraController!.description.lensDirection,
+                    boundingBoxColor,
                   ),
                 ),
-              ),
+              );
+            }),
 
             // Layer UI điều khiển (Nút back, trạng thái text...)
             _buildOverlayUI(),
+
+            // ✅ LAYER 4: MÀN HÌNH THÀNH CÔNG (SUCCESS OVERLAY)
+            Obx(() {
+              // Nếu chưa nhận ra ai thì tàng hình
+              if (controller.recognizedName.value == "Unknown") {
+                return const SizedBox.shrink();
+              }
+
+              // Nếu nhận diện thành công -> Phủ màn hình đen mờ và hiện chữ
+              return Container(
+                color: Colors.black.withValues(
+                  alpha: 0.7,
+                ), // Làm mờ camera đi 70%
+                child: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Icon check mark xanh lá to đùng
+                      const Icon(
+                        Icons.check_circle,
+                        color: Colors.greenAccent,
+                        size: 100,
+                      ),
+                      const SizedBox(height: 20),
+                      const Text(
+                        "Điểm danh thành công",
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      // Tên người dùng
+                      Text(
+                        "Xin chào, ${controller.recognizedName.value}!",
+                        style: const TextStyle(
+                          color: Colors.greenAccent,
+                          fontSize: 22,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }),
+
+            // ✅ LAYER 5: NÚT BACK (Thoát về màn hình Home)
+            Positioned(
+              top: 20, // Khoảng cách từ trên xuống
+              left: 16, // Khoảng cách từ mép trái
+              child: SafeArea(
+                // SafeArea giúp nút không bị lẹm vào "tai thỏ" hoặc thanh trạng thái
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(
+                      alpha: 0.4,
+                    ), // Phủ nền mờ để nút luôn hiện rõ trên mọi nền camera
+                    shape: BoxShape.circle,
+                  ),
+                  child: IconButton(
+                    icon: const Icon(
+                      Icons.arrow_back_ios_new, // Icon mũi tên quay lại
+                      color: Colors.white,
+                      size: 24,
+                    ),
+                    onPressed: () {
+                      Get.back(); // Lệnh GetX siêu ngắn gọn để đóng màn hình hiện tại
+                    },
+                  ),
+                ),
+              ),
+            ),
           ],
         );
       }),
@@ -87,38 +167,45 @@ class FaceAttendanceView extends GetView<FaceAttendanceController> {
       left: 20,
       right: 20,
       child: Center(
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-          decoration: BoxDecoration(
-            color: Colors.black54, // Nền đen mờ
-            borderRadius: BorderRadius.circular(30),
-            border: Border.all(color: Colors.white24), // Viền nhẹ cho đẹp
-          ),
-          child: Obx(() {
-            // LOGIC HIỂN THỊ TRẠNG THÁI THÔNG MINH
-            String statusText = "";
-            Color statusColor = Colors.white;
+        child: Obx(() {
+          if (controller.recognizedName.value != "Unknown") {
+            return const SizedBox.shrink(); // Trả về widget tàng hình
+          }
 
-            if (controller.faceInstruction.value.isNotEmpty) {
-              statusText = controller.faceInstruction.value;
-              statusColor = Colors.orangeAccent; // Màu cam cảnh báo
-            } else if (controller.isProcessing.value) {
-              // 1. Đang chạy TFLite (Máy đang tính toán)
-              statusText = "⏳ Đang xử lý hình ảnh...";
-              statusColor = Colors.yellowAccent;
-            } else if (controller.recognizedName.value != "Unknown") {
-              // 2. Đã nhận diện ra tên
-              statusText = "✅ Xin chào: ${controller.recognizedName.value}";
-              statusColor = Colors.greenAccent;
-            } else if (controller.detectedFaces.isNotEmpty) {
-              // 3. Thấy mặt nhưng chưa nhận diện xong/chưa đủ điều kiện
-              statusText = "🔍 Đang nhận diện...";
-            } else {
-              // 4. Không thấy ai
-              statusText = "Xin hãy nhìn vào Camera";
-            }
+          if (controller.isSpoofing.value &&
+              controller.errorMsg.value.isEmpty) {
+            return const SizedBox.shrink();
+          }
 
-            return Text(
+          // LOGIC HIỂN THỊ TRẠNG THÁI THÔNG MINH
+          String statusText = "";
+          Color statusColor = Colors.white;
+
+          // Hiển thị lỗi giả mạo (Anti-spoofing)
+          if (controller.errorMsg.value.isNotEmpty) {
+            statusText = controller.errorMsg.value;
+            statusColor = Colors.redAccent;
+            // Nhắc nhở khoảng cách khuôn mặt
+          } else if (controller.faceInstruction.value.isNotEmpty) {
+            statusText = controller.faceInstruction.value;
+            statusColor = Colors.orangeAccent; // Màu cam cảnh báo
+            // Đang quét
+          } else if (controller.detectedFaces.isNotEmpty) {
+            // 3. Thấy mặt nhưng chưa nhận diện xong/chưa đủ điều kiện
+            statusText = "🔍 Đang nhận diện...";
+            // 4. Không thấy ai
+          } else {
+            statusText = "Xin hãy nhìn vào Camera";
+          }
+
+          return Container(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+            decoration: BoxDecoration(
+              color: Colors.black54, // Nền đen mờ
+              borderRadius: BorderRadius.circular(30),
+              border: Border.all(color: Colors.white24),
+            ),
+            child: Text(
               statusText,
               style: TextStyle(
                 color: statusColor,
@@ -126,9 +213,9 @@ class FaceAttendanceView extends GetView<FaceAttendanceController> {
                 fontWeight: FontWeight.bold,
               ),
               textAlign: TextAlign.center,
-            );
-          }),
-        ),
+            ),
+          );
+        }),
       ),
     );
   }

@@ -3,34 +3,56 @@ import 'dart:isolate';
 import 'dart:ffi';
 
 // import 'package:flutter/foundation.dart';
+import 'package:get/get.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 
 import '../../app/types/face_progress.dart';
 import '../services/log_service.dart';
+import '../../data/models/registration_result.dart';
 
-class FaceIsolateService {
-  late Isolate _isolate;
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+import 'package:image/image.dart' as img;
+
+class FaceIsolateService extends GetxService {
+  // late Isolate _isolate;
   late SendPort _sendPort;
-  final _responseStream = StreamController<dynamic>.broadcast();
+  ReceivePort? _receivePort;
+  // final _responseStream = StreamController<dynamic>.broadcast();
   bool _isReady = false;
 
   // Dùng Map để lưu các Completer đang chờ, Key là ID
   final Map<int, Completer<dynamic>> _pendingRequests = {};
   int _nextRequestId = 0;
 
-  // Khởi tạo Isolate 
+  // Khởi tạo Isolate
   Future<void> start() async {
-    final receivePort = ReceivePort();
+    // final sw = Stopwatch()..start(); // ⏱️ Bắt đầu đo
+
+    if (_isReady) return;
+
+    // 1. Tạo một cái Barie
+    final completer = Completer<void>();
+
+    _receivePort = ReceivePort();
 
     // Spawn Isolate
-    _isolate = await Isolate.spawn(_isolateEntryPoint, receivePort.sendPort);
+    Isolate.spawn(_isolateEntryPoint, _receivePort!.sendPort);
 
     // Lắng nghe port
-    receivePort.listen((message) {
+    _receivePort!.listen((message) {
       if (message is SendPort) {
         _sendPort = message;
         _isReady = true;
+
+        // sw.stop(); // ⏱️ Dừng đo
+        // AppLog.info("⏱️ Thời gian Spawn Isolate: ${sw.elapsedMilliseconds}ms");
         AppLog.info("✅ FaceIsolateService: Worker Started!");
+
+        // 2. MỞ BARIE: Lúc này hàm start() mới thực sự được xem là hoàn thành
+        if (!completer.isCompleted) {
+          completer.complete();
+        }
       } else if (message is List) {
         // Message trả về: [RequestId, ResultList]
         int reqId = message[0];
@@ -43,6 +65,9 @@ class FaceIsolateService {
         }
       }
     });
+
+    // 3. Bắt luồng chính đứng chờ ở Barie
+    return completer.future;
   }
 
   // // --- HÀM 1: CROP NHẬN DIỆN (112x112) ---
@@ -119,6 +144,37 @@ class FaceIsolateService {
     return completer.future;
   }
 
+  Future<RegistrationResult?> processRegistrationInIsolate({
+    required int address,
+    required int width,
+    required int height,
+    required Face face,
+    required int rotation,
+  }) async {
+    if (!_isReady) return null;
+
+    final completer = Completer<RegistrationResult?>();
+    int reqId = _nextRequestId++;
+    _pendingRequests[reqId] = completer;
+
+    final landmarksData = _extractLandmarks(face);
+
+    _sendPort.send([
+      reqId,
+      address,
+      width,
+      height,
+      0, // yStride (Không cần cho mode này, cứ truyền 0)
+      landmarksData,
+      0, 0, 0, 0, // rect (Không dùng)
+      rotation,
+      1, // 👈 type = 1: Báo cho Isolate biết đây là tác vụ ĐĂNG KÝ
+      0, // spoofSize
+    ]);
+
+    return completer.future;
+  }
+
   // Future<List<double>?> _sendRequest(
   //   Uint8List yuvBytes,
   //   int width,
@@ -158,9 +214,25 @@ class FaceIsolateService {
   // }
 
   // Hủy Isolate khi thoát app
-  void dispose() {
-    _isolate.kill();
-    _responseStream.close();
+  void reset() {
+    // _isReady = false;
+
+    // A. Giải phóng các luồng đang chờ (Chống treo app)
+    _pendingRequests.forEach((id, completer) {
+      if (!completer.isCompleted) {
+        completer.completeError("Camera closed");
+      }
+    });
+    _pendingRequests.clear();
+
+    // // B. Đóng các cổng giao tiếp (Chống rò rỉ bộ nhớ)
+    // _receivePort?.close();
+    // _responseStream.close();
+
+    // // C. Tiêu diệt Isolate ngay lập tức
+    // _isolate.kill(priority: Isolate.immediate);
+
+    AppLog.info("✅ Isolate Worker đã được đưa về trạng thái chờ (Idle)!");
   }
 
   // ----------------------------------------------------------------
@@ -189,32 +261,72 @@ class FaceIsolateService {
       final int rectH = message[9];
       final int rotation = message[10];
       // final int spoofModelType = message[12];
+      final int taskType = message[11]; // 0 = Dual Task, 1 = Registration
       final int spoofTargetSize = message[12];
 
       try {
         final Pointer<Uint8> ptrYuv = Pointer<Uint8>.fromAddress(address);
 
-        final result = FaceProcessorNative.processDualTask(
-          ptrYuv: ptrYuv,
-          width: width,
-          height: height,
-          yStride: yStride,
-          // uvStride: uvStride,
-          landmarks: landmarks,
-          rotation: rotation,
-          rectX: rectX,
-          rectY: rectY,
-          rectW: rectW,
-          rectH: rectH,
-          spoofWidth: spoofTargetSize,
-          spoofHeight: spoofTargetSize,
-          // spoofModelType: spoofModelType,
-        );
+        if (taskType == 0) {
+          final result = FaceProcessorNative.processDualTask(
+            ptrYuv: ptrYuv,
+            width: width,
+            height: height,
+            yStride: yStride,
+            landmarks: landmarks,
+            rotation: rotation,
+            rectX: rectX,
+            rectY: rectY,
+            rectW: rectW,
+            rectH: rectH,
+            spoofWidth: spoofTargetSize,
+            spoofHeight: spoofTargetSize,
+          );
 
-        // Trả về: [ID, Dữ liệu]
-        mainSendPort.send([reqId, result]);
+          // Trả về: [ID, Dữ liệu]
+          mainSendPort.send([reqId, result]);
+        } else if (taskType == 1) {
+          // ----------------------------------------------------
+          // TYPE 1: ĐĂNG KÝ KHOÉT ẢNH VÀ TẠO JPG
+          // ----------------------------------------------------
+          final List<double>? aiPixels =
+              FaceProcessorNative.processRegistration(
+                ptrYuv: ptrYuv, // Đã có sẵn từ address
+                width: width, // Đã nhận từ message
+                height: height, // Đã nhận từ message
+                landmarks: landmarks, // Đã nhận từ message
+                rotation: rotation, // Đã nhận từ message
+              );
+
+          if (aiPixels == null) {
+            mainSendPort.send([reqId, null]);
+            return;
+          }
+
+          // Vẽ ảnh JPG trực tiếp bên trong Isolate này luôn (Không làm đơ UI)
+          final image = img.Image(width: 112, height: 112);
+          for (int y = 0; y < 112; y++) {
+            for (int x = 0; x < 112; x++) {
+              int index = (y * 112 + x) * 3;
+              double r = (aiPixels[index] * 128.0) + 127.5;
+              double g = (aiPixels[index + 1] * 128.0) + 127.5;
+              double b = (aiPixels[index + 2] * 128.0) + 127.5;
+              image.setPixelRgb(x, y, r.toInt(), g.toInt(), b.toInt());
+            }
+          }
+
+          Uint8List displayBytes = Uint8List.fromList(
+            img.encodeJpg(image, quality: 100),
+          );
+
+          // Trả về thẳng object RegistrationResult
+          mainSendPort.send([
+            reqId,
+            RegistrationResult(aiPixels, displayBytes),
+          ]);
+        }
       } catch (e) {
-        // debugPrint("Worker Error: $e");
+        // AppLog.error("Worker Error: $e");
         mainSendPort.send([reqId, null]);
       }
     });
@@ -257,18 +369,18 @@ class FaceIsolateService {
     return list;
   }
 
-  void stop() {
-    _isReady = false;
+  // void stop() {
+  //   _isReady = false;
 
-    // 1. Kết thúc tất cả các yêu cầu đang đợi với một lỗi
-    _pendingRequests.forEach((id, completer) {
-      if (!completer.isCompleted) {
-        completer.completeError("Isolate stopped");
-      }
-    });
-    _pendingRequests.clear();
+  //   // 1. Kết thúc tất cả các yêu cầu đang đợi với một lỗi
+  //   _pendingRequests.forEach((id, completer) {
+  //     if (!completer.isCompleted) {
+  //       completer.completeError("Isolate stopped");
+  //     }
+  //   });
+  //   _pendingRequests.clear();
 
-    // 2. Kill isolate
-    _isolate.kill(priority: Isolate.immediate);
-  }
+  //   // 2. Kill isolate
+  //   _isolate.kill(priority: Isolate.immediate);
+  // }
 }

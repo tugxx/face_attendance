@@ -325,7 +325,7 @@ extern "C" __attribute__((visibility("default"))) __attribute__((used)) {
     float cy = rY + rH / 2.0f;
 
     // Scale
-    float scale = 1.0f;
+    float scale = 2.7f;
     int crop_height = (int)(rH * scale);
     // int crop_width = (int)(crop_height * 1.0f / 1.35f);
     int crop_width = (int)(rW * scale);

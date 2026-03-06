@@ -1,6 +1,7 @@
 // import 'dart:io';
 import 'dart:math';
 
+import 'package:get/get.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:flutter/foundation.dart';
 // import 'package:image/image.dart' as img;
@@ -8,7 +9,7 @@ import 'package:flutter/foundation.dart';
 
 import '../services/log_service.dart';
 
-class FaceAntiSpoofingService {
+class FaceAntiSpoofingService extends GetxService {
   // --- SINGLETON PATTERN ---
   static final FaceAntiSpoofingService _instance =
       FaceAntiSpoofingService._internal();
@@ -36,17 +37,17 @@ class FaceAntiSpoofingService {
     try {
       AppLog.info("🛡️ Khởi tạo FaceAntiSpoofingService...");
 
-      AppLog.info("👉 Bước 1: Cấu hình InterpreterOptions (Dùng CPU)...");
+      // AppLog.info("👉 Bước 1: Cấu hình InterpreterOptions (Dùng CPU)...");
       final options = InterpreterOptions();
       options.threads = 4;
 
-      AppLog.info("👉 Bước 2: Đọc file model từ Asset: $_modelPath ...");
+      // AppLog.info("👉 Bước 2: Đọc file model từ Asset: $_modelPath ...");
       _interpreter = await Interpreter.fromAsset(_modelPath, options: options);
 
-      AppLog.info("👉 Bước 3: Load file thành công! Đang lấy Input Tensor...");
+      // AppLog.info("👉 Bước 3: Load file thành công! Đang lấy Input Tensor...");
       var inputTensor = _interpreter!.getInputTensor(0);
       var inputShape = inputTensor.shape;
-      AppLog.info("   -> Input Shape: $inputShape");
+      // AppLog.info("   -> Input Shape: $inputShape");
 
       // AppLog.info("👉 Bước 4: Đang lấy Output Tensor...");
       // var outputTensor = _interpreter!.getOutputTensor(0);
@@ -64,7 +65,7 @@ class FaceAntiSpoofingService {
       //   AppLog.info("Output $i shape: ${outputs[i].shape}");
       // }
 
-      AppLog.info("🚀 HOÀN THÀNH KHỞI TẠO ANTI-SPOOFING MODEL!");
+      // AppLog.info("🚀 HOÀN THÀNH KHỞI TẠO ANTI-SPOOFING MODEL!");
     } catch (e, stackTrace) {
       AppLog.error("❌ LỖI TẠI KHÂU KHỞI TẠO ANTI-SPOOFING MODEL!");
       AppLog.error("Chi tiết lỗi: $e");
@@ -102,7 +103,7 @@ class FaceAntiSpoofingService {
       // 6. Class 1 là Real
       final double scoreReal = probabilities[1];
 
-      AppLog.info("🛡️ Real Score: ${(scoreReal * 100).toStringAsFixed(2)}%");
+      // AppLog.info("🛡️ Real Score: ${(scoreReal * 100).toStringAsFixed(2)}%");
 
       // 7. Ngưỡng (Threshold)
       return scoreReal > _threshold;

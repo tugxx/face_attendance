@@ -18,56 +18,71 @@ class HomeView extends GetView<HomeController> {
         backgroundColor: Colors.blueAccent,
         elevation: 0,
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(20.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          mainAxisAlignment: MainAxisAlignment.center,
+      body: Obx(() {
+        return Stack(
           children: [
-            const Text(
-              "Chọn chức năng",
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-                color: Colors.black87,
+            // --- GIAO DIỆN CHÍNH ---
+            Padding(
+              padding: const EdgeInsets.all(20.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Text(
+                    "Chọn chức năng",
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.black87,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 30),
+
+                  // 1. NÚT ĐĂNG KÝ
+                  _buildMenuCard(
+                    icon: Icons.person_add_alt_1,
+                    title: "Đăng ký Khuôn mặt",
+                    subtitle: "Thêm nhân viên mới vào hệ thống",
+                    color: Colors.orange,
+                    onTap: controller.goToRegister,
+                  ),
+
+                  const SizedBox(height: 20),
+
+                  // // 2. NÚT DEBUG (Màn hình hiện tại của bạn)
+                  // _buildMenuCard(
+                  //   icon: Icons.developer_mode,
+                  //   title: "Debug / Kiểm tra",
+                  //   subtitle: "Xem bounding box & thông số AI",
+                  //   color: Colors.grey[800]!,
+                  //   onTap: controller.goToDebug,
+                  // ),
+                  const SizedBox(height: 20),
+
+                  // 3. NÚT CHẤM CÔNG
+                  _buildMenuCard(
+                    icon: Icons.fact_check,
+                    title: "Điểm danh",
+                    subtitle: "Chế độ chấm công tự động",
+                    color: Colors.green,
+                    onTap: controller.goToAttendance,
+                  ),
+                ],
               ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 30),
-
-            // 1. NÚT ĐĂNG KÝ
-            _buildMenuCard(
-              icon: Icons.person_add_alt_1,
-              title: "Đăng ký Khuôn mặt",
-              subtitle: "Thêm nhân viên mới vào hệ thống",
-              color: Colors.orange,
-              onTap: controller.goToRegister,
             ),
 
-            const SizedBox(height: 20),
-
-            // 2. NÚT DEBUG (Màn hình hiện tại của bạn)
-            _buildMenuCard(
-              icon: Icons.developer_mode,
-              title: "Debug / Kiểm tra",
-              subtitle: "Xem bounding box & thông số AI",
-              color: Colors.grey[800]!,
-              onTap: controller.goToDebug,
-            ),
-
-            const SizedBox(height: 20),
-
-            // 3. NÚT CHẤM CÔNG
-            _buildMenuCard(
-              icon: Icons.fact_check,
-              title: "Điểm danh",
-              subtitle: "Chế độ chấm công tự động",
-              color: Colors.green,
-              onTap: controller.goToAttendance,
-            ),
+            // --- LỚP OVERLAY LOADING (Chỉ hiện khi isLoadingAI = true) ---
+            if (controller.isLoadingAI.value)
+              Container(
+                color: Colors.black.withValues(
+                  alpha: 0.3,
+                ), // Màn mờ chặn thao tác
+                child: const Center(child: CircularProgressIndicator()),
+              ),
           ],
-        ),
-      ),
+        );
+      }),
     );
   }
 

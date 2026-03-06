@@ -41,6 +41,7 @@ dependencies:
   google_mlkit_face_detection: ^0.13.1
   tflite_flutter: ^0.11.0
   hive_flutter: ^1.1.0 
+  audioplayers: ^6.6.0
   # archive: ^4.0.7 #
   # flutter_image_compress: ^2.3.0 #
 
@@ -79,7 +80,9 @@ flutter:
     # - assets/models/w600k_mbf_float32.tflite
     # - assets/models/output_model_test.tflite
     # - assets/dataset.zip
-    # - assets/db_mobilefacenet_tflite.json
+    - assets/db_mobilefacenet_tflite.json
+    # - assets/sounds/universfield-new-notification-07-210334.mp3
+    - assets/sounds/miraclei-sample_confirm_accept01_kofi_by_miraclei-364181.mp3
     # - assets/db_MobileFaceNet_testing_2_tflite.json
     # - assets/db_w600k_mbf_float32_tflite.json
 
