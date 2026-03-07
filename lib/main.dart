@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'app/config/app_pages.dart';
 
+// import 'app/services/face_isolate_service.dart';
+
 void main() {
   // final stopwatch = Stopwatch()..start();
 
@@ -18,6 +20,8 @@ void main() {
       theme: ThemeData.dark(),
     ),
   );
+
+  // testCPlusPlusLink();
 
   // stopwatch.stop();
   // AppLog.info(

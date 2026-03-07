@@ -3,6 +3,7 @@ import 'dart:isolate';
 import 'dart:ffi';
 
 // import 'package:flutter/foundation.dart';
+// import 'package:ffi/ffi.dart'; //
 import 'package:get/get.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 
@@ -384,3 +385,27 @@ class FaceIsolateService extends GetxService {
   //   _isolate.kill(priority: Isolate.immediate);
   // }
 }
+
+// typedef GetTFLiteVersionC = Pointer<Utf8> Function();
+// typedef GetTFLiteVersionDart = Pointer<Utf8> Function();
+
+// void testCPlusPlusLink() {
+//   try {
+//     // Mở thư viện (bạn chắc đã có đoạn này rồi)
+//     final dylib = DynamicLibrary.open('libnative_face_align.so');
+
+//     // Tìm hàm GetTFLiteVersion
+//     final getVersion = dylib
+//         .lookupFunction<GetTFLiteVersionC, GetTFLiteVersionDart>(
+//           'GetTFLiteVersion',
+//         );
+
+//     // Thực thi và in ra console
+//     final versionPointer = getVersion();
+//     AppLog.info(
+//       "🟢 [DART LOG]: TFLite Version từ C++ là: ${versionPointer.toDartString()}",
+//     );
+//   } catch (e) {
+//     AppLog.error("🔴 [LỖI DART]: Không gọi được C++, lỗi: $e");
+//   }
+// }

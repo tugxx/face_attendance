@@ -16,6 +16,10 @@
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
 #include "stb_image_resize.h"
 
+// #include "tensorflow/lite/c/c_api.h"
+// #define LOGI(...) \
+//   __android_log_print(ANDROID_LOG_INFO, "FaceAlignCPP", __VA_ARGS__)
+
 // 5 Điểm chuẩn (Reference Points) cho ảnh 112x112
 // [Mắt trái, Mắt phải, Mũi, Miệng trái, Miệng phải]
 const float REF_X[] = {38.2946f, 73.5318f, 56.0252f, 41.5493f, 70.7299f};
@@ -404,3 +408,12 @@ extern "C" __attribute__((visibility("default"))) __attribute__((used)) {
     }
   }
 }
+
+// extern "C" __attribute__((visibility("default"))) __attribute__((used))
+// const char *
+// GetTFLiteVersion() {
+//   // Gọi thử 1 hàm của TFLite để xem có bị lỗi "symbol not found" không
+//   const char *version = TfLiteVersion();
+//   LOGI("🔥 Khởi động C++ thành công! Phiên bản TFLite: %s", version);
+//   return version;
+// }

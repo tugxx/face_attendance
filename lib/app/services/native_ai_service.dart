@@ -1,0 +1,294 @@
+import 'dart:ffi';
+import 'dart:typed_data';
+import 'package:ffi/ffi.dart';
+import 'package:flutter/services.dart' show rootBundle;
+
+import '../../app/services/log_service.dart';
+
+class RecognitionResult {
+  final String name;
+  final double distance;
+  final bool isUnknown;
+
+  RecognitionResult(this.name, this.distance, this.isUnknown);
+
+  @override
+  String toString() {
+    return 'Tên: $name, Điểm: ${(distance * 100).toStringAsFixed(1)}%, Lạ mặt: $isUnknown';
+  }
+}
+
+// 1. Khởi tạo Model Face
+typedef InitFaceModelC = Int32 Function(Pointer<Void> faceData, Int32 faceSize);
+typedef InitFaceModelDart = int Function(Pointer<Void> faceData, int faceSize);
+
+// Khởi tạo Model Spoofing
+typedef InitSpoofModelC =
+    Int32 Function(Pointer<Void> spoofData, Int32 spoofSize);
+typedef InitSpoofModelDart =
+    int Function(Pointer<Void> spoofData, int spoofSize);
+
+// 2. Trích xuất Đặc trưng (Extract Embedding)
+typedef ExtractFeatureC =
+    Int32 Function(
+      Pointer<Float> input,
+      Int32 inputSize,
+      Pointer<Float> output,
+    );
+typedef ExtractFeatureDart =
+    int Function(Pointer<Float> input, int inputSize, Pointer<Float> output);
+
+// 3. Quản lý Database trên RAM C++
+typedef RegisterFaceC =
+    Void Function(Pointer<Utf8> name, Pointer<Float> embedding, Int32 size);
+typedef RegisterFaceDart =
+    void Function(Pointer<Utf8> name, Pointer<Float> embedding, int size);
+
+typedef ClearDatabaseC = Void Function();
+typedef ClearDatabaseDart = void Function();
+
+// 4. Dự đoán (Predict)
+typedef PredictFaceC =
+    Int32 Function(
+      Pointer<Float> input,
+      Int32 inputSize,
+      Float threshold,
+      Pointer<Utf8> outName,
+      Pointer<Float> outDistance,
+    );
+typedef PredictFaceDart =
+    int Function(
+      Pointer<Float> input,
+      int inputSize,
+      double threshold,
+      Pointer<Utf8> outName,
+      Pointer<Float> outDistance,
+    );
+
+typedef PredictSpoofC = Float Function(Pointer<Float> input, Int32 inputSize);
+typedef PredictSpoofDart = double Function(Pointer<Float> input, int inputSize);
+
+class NativeAiService {
+  static final NativeAiService _instance = NativeAiService._internal();
+  factory NativeAiService() => _instance;
+  NativeAiService._internal();
+
+  late DynamicLibrary _dylib;
+
+  late InitFaceModelDart _initFaceModelNative;
+  late ExtractFeatureDart _extractFeatureNative;
+  late RegisterFaceDart _registerFaceNative;
+  late ClearDatabaseDart _clearDatabaseNative;
+  late PredictFaceDart _predictFaceNative;
+  late InitSpoofModelDart _initSpoofModelNative;
+  late PredictSpoofDart _predictSpoofNative;
+
+  // Biến giữ vùng nhớ C++ không bị Dart gom rác (BẮT BUỘC PHẢI GIỮ)
+  Pointer<Uint8>? _faceBuffer;
+  Pointer<Uint8>? _spoofBuffer; // Buffer giữ model Spoofing trên RAM
+
+  // Hàm phụ trợ đọc asset
+  Future<Uint8List> _loadAssetBytes(String path) async {
+    final byteData = await rootBundle.load(path);
+    return byteData.buffer.asUint8List();
+  }
+
+  /// Mở thư viện và móc nối toàn bộ các hàm C++
+  void _openLibrary() {
+    // AppLog.info("🔗 Đang móc nối thư viện C++...");
+    _dylib = DynamicLibrary.open('libnative_face_align.so');
+
+    _initFaceModelNative = _dylib
+        .lookupFunction<InitFaceModelC, InitFaceModelDart>('InitFaceModel');
+    _extractFeatureNative = _dylib
+        .lookupFunction<ExtractFeatureC, ExtractFeatureDart>(
+          'ExtractFaceFeature',
+        );
+    _registerFaceNative = _dylib
+        .lookupFunction<RegisterFaceC, RegisterFaceDart>('RegisterFace');
+    _clearDatabaseNative = _dylib
+        .lookupFunction<ClearDatabaseC, ClearDatabaseDart>('ClearDatabase');
+    _predictFaceNative = _dylib.lookupFunction<PredictFaceC, PredictFaceDart>(
+      'PredictFaceNative',
+    );
+    _initSpoofModelNative = _dylib
+        .lookupFunction<InitSpoofModelC, InitSpoofModelDart>('InitSpoofModel');
+    _predictSpoofNative = _dylib
+        .lookupFunction<PredictSpoofC, PredictSpoofDart>('PredictSpoofNative');
+  }
+
+  /// Khởi tạo Face Model từ thư mục Assets
+  Future<bool> initFaceModel(String modelPath) async {
+    if (_faceBuffer != null) return true; // Đã khởi tạo rồi thì bỏ qua
+
+    try {
+      _openLibrary();
+
+      // 1. Đọc file .tflite thành byte
+      final faceBytes = await _loadAssetBytes(modelPath);
+
+      // 2. Cấp phát bộ nhớ không giải phóng (Để C++ dùng liên tục)
+      _faceBuffer = calloc<Uint8>(faceBytes.length);
+      _faceBuffer!.asTypedList(faceBytes.length).setAll(0, faceBytes);
+
+      // 3. Gọi C++ khởi tạo Interpreter
+      final result = _initFaceModelNative(
+        _faceBuffer!.cast<Void>(),
+        faceBytes.length,
+      );
+
+      if (result == 1) {
+        // AppLog.info("🎉 C++ Đã nạp xong Face Model!");
+        return true;
+      } else {
+        // AppLog.error("❌ C++ nạp Face Model thất bại!");
+        return false;
+      }
+    } catch (e) {
+      // AppLog.error("❌ Lỗi FFI Init Face Model: $e");
+      return false;
+    }
+  }
+
+  /// Khởi tạo Anti-Spoofing Model
+  Future<bool> initSpoofModel(String modelPath) async {
+    if (_spoofBuffer != null) return true; // Đã khởi tạo rồi thì bỏ qua
+
+    try {
+      _openLibrary(); // Nếu dylib mở rồi thì nó không mở lại đâu, đừng lo
+
+      final spoofBytes = await _loadAssetBytes(modelPath);
+
+      _spoofBuffer = calloc<Uint8>(spoofBytes.length);
+      _spoofBuffer!.asTypedList(spoofBytes.length).setAll(0, spoofBytes);
+
+      final result = _initSpoofModelNative(
+        _spoofBuffer!.cast<Void>(),
+        spoofBytes.length,
+      );
+
+      if (result == 1) {
+        AppLog.info("🛡️ C++ Đã nạp xong Anti-Spoof Model!");
+        return true;
+      } else {
+        AppLog.error("❌ C++ nạp Anti-Spoof Model thất bại!");
+        return false;
+      }
+    } catch (e) {
+      // AppLog.error("❌ Lỗi FFI Init Anti-Spoof Model: $e");
+      return false;
+    }
+  }
+
+  /// Trích xuất Vector đặc trưng (192 chiều) từ mảng Pixel ảnh
+  List<double>? getEmbeddingFromC(List<double> inputPixels) {
+    // 1. Chép mảng pixel ảnh sang C++
+    final inputPointer = calloc<Float>(inputPixels.length);
+    inputPointer.asTypedList(inputPixels.length).setAll(0, inputPixels);
+
+    // Cấp phát buffer 192 chiều để hứng kết quả
+    final outputPointer = calloc<Float>(192);
+
+    // 3. Chạy hàm C++
+    final result = _extractFeatureNative(
+      inputPointer,
+      inputPixels.length,
+      outputPointer,
+    );
+
+    List<double>? embedding;
+    if (result == 1) {
+      // Đọc dữ liệu C++ đã điền vào
+      embedding = outputPointer.asTypedList(192).toList();
+    }
+
+    // Dọn rác
+    calloc.free(inputPointer);
+    calloc.free(outputPointer);
+
+    return embedding;
+  }
+
+  /// Bơm 1 khuôn mặt vào RAM của C++
+  void addFaceToNative(String name, List<double> embedding) {
+    // Chuyển String Dart thành char* C++
+    final nativeName = name.toNativeUtf8();
+
+    // Cấp phát bộ nhớ C++ và copy List<double> sang Float*
+    final pointer = calloc<Float>(embedding.length);
+    pointer.asTypedList(embedding.length).setAll(0, embedding);
+
+    // Gửi xuống C++
+    _registerFaceNative(nativeName, pointer, embedding.length);
+
+    // BẮT BUỘC DỌN RÁC (Tránh rò rỉ RAM)
+    calloc.free(nativeName);
+    calloc.free(pointer);
+  }
+
+  RecognitionResult predictFace(List<double> inputPixels, double threshold) {
+    // 1. Chuẩn bị ảnh đầu vào
+    final inputPtr = calloc<Float>(inputPixels.length);
+    inputPtr.asTypedList(inputPixels.length).setAll(0, inputPixels);
+
+    // 2. Chuẩn bị 2 THÙNG RỖNG để hứng Tên và Điểm
+    final outNamePtr = calloc<Uint8>(256).cast<Utf8>(); // Cấp 256 byte cho Tên
+    final outDistPtr = calloc<Float>(1); // Cấp 1 ô Float cho Điểm
+
+    // 3. Chuyển cho C++ xử lý (C++ sẽ ghi đè dữ liệu vào 2 thùng này)
+    final status = _predictFaceNative(
+      inputPtr,
+      inputPixels.length,
+      threshold,
+      outNamePtr,
+      outDistPtr,
+    );
+
+    RecognitionResult result;
+    if (status == 0) {
+      result = RecognitionResult("Error", 0.0, true);
+    } else {
+      // 4. Mở thùng lấy dữ liệu
+      final name = outNamePtr.toDartString();
+      final distance = outDistPtr.value;
+      final isUnknown = (status == 2);
+
+      result = RecognitionResult(name, distance, isUnknown);
+    }
+
+    // Bắt buộc dọn rác
+    calloc.free(inputPtr);
+    calloc.free(outNamePtr);
+    calloc.free(outDistPtr);
+
+    return result;
+  }
+
+  double predictSpoof(List<double> inputPixels) {
+    // Ép mảng List<double> xuống Float Pointer C++
+    final inputPtr = calloc<Float>(inputPixels.length);
+    inputPtr.asTypedList(inputPixels.length).setAll(0, inputPixels);
+
+    // Bắn qua C++
+    final score = _predictSpoofNative(inputPtr, inputPixels.length);
+
+    // Bắt buộc dọn rác
+    calloc.free(inputPtr);
+
+    return score;
+  }
+
+  /// Dọn sạch RAM C++ (Khi user đăng xuất hoặc xóa Database)
+  void clearNativeDatabase() {
+    _clearDatabaseNative();
+  }
+
+  // Nhớ giải phóng bộ nhớ khi tắt app
+  void dispose() {
+    if (_faceBuffer != null) {
+      calloc.free(_faceBuffer!);
+      _faceBuffer = null;
+    }
+    if (_spoofBuffer != null) calloc.free(_spoofBuffer!);
+  }
+}

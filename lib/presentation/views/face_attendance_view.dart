@@ -44,7 +44,8 @@ class FaceAttendanceView extends GetView<FaceAttendanceController> {
             Obx(() {
               // Nếu không có mặt thì không vẽ gì cả
               if (controller.detectedFaces.isEmpty ||
-                  controller.recognizedName.value != "Unknown") {
+                  controller.recognizedName.value != "Unknown" ||
+                  controller.errorMsg.value.isNotEmpty) {
                 return const SizedBox.shrink();
               }
 

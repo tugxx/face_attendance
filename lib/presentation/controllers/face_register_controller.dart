@@ -61,6 +61,8 @@ class FaceRegisterController extends GetxController {
   var frameColor = Colors.white70.obs;
   var scanProgress = 0.0.obs;
 
+  final isSuccess = false.obs;
+
   // Trả về điểm số độ nét. Điểm càng cao ảnh càng sắc nét.
   (double, double) _calculateFaceQuality(CameraImage image, Face face) {
     try {
@@ -120,19 +122,20 @@ class FaceRegisterController extends GetxController {
 
   // Hàm phụ trợ để xử lý kết quả và thông báo
   void _handleResult(bool success, String message) async {
-    isRegistering.value = false;
-
     if (success) {
+      isSuccess.value = true;
+      isRegistering.value = false;
+
       Get.snackbar(
         "Thành công",
         message,
         backgroundColor: Colors.green,
         colorText: Colors.white,
-        duration: const Duration(milliseconds: 1500),
+        duration: const Duration(milliseconds: 3000),
       );
 
-      // 🛑 2. Đợi 1.5 giây cho người dùng đọc thông báo rồi mới thoát
-      await Future.delayed(const Duration(milliseconds: 1500));
+      // 🛑 2. Đợi 3.0 giây cho người dùng đọc thông báo rồi mới thoát
+      await Future.delayed(const Duration(milliseconds: 3000));
 
       if (Get.isSnackbarOpen) {
         Get.closeCurrentSnackbar();
@@ -140,6 +143,7 @@ class FaceRegisterController extends GetxController {
 
       Get.until((route) => route.isFirst);
     } else {
+      isRegistering.value = false;
       Get.snackbar("Lỗi", "Thao tác thất bại");
       _resumeCamera();
     }
@@ -158,7 +162,7 @@ class FaceRegisterController extends GetxController {
     // Khung Oval chiếm 70% màn hình.
     // -> Mặt lý tưởng nhất nên chiếm khoảng 40% đến 60% màn hình.
     final minFaceWidth = shortEdge * 0.40; // Mặt quá nhỏ
-    final maxFaceWidth = shortEdge * 0.60; // Mặt quá to (tràn Oval)
+    final maxFaceWidth = shortEdge * 0.75; // Mặt quá to (tràn Oval)
 
     final faceWidth = face.boundingBox.width;
 
@@ -178,7 +182,7 @@ class FaceRegisterController extends GetxController {
 
     // Cảnh báo nếu môi trường tối thui (Tránh AI nhận diện sai bét)
     if (brightness < 40.0) {
-      faceInstruction.value = "Môi trường quá TỐI, vui lòng tìm nơi sáng hơn!";
+      faceInstruction.value = "Môi trường quá tối, vui lòng tìm nơi sáng hơn!";
       frameColor.value = Colors.orangeAccent;
       return false;
     }
@@ -473,7 +477,7 @@ class FaceRegisterController extends GetxController {
     // await cameraController?.stopImageStream();
 
     try {
-      AppLog.info("📸 Đang chụp góc thứ ${registrationStep.value}...");
+      // AppLog.info("📸 Đang chụp góc thứ ${registrationStep.value}...");
 
       // ---------------------------------------------------------
       // 1. CHUẨN BỊ BỘ NHỚ (COPY ẢNH VÀO C++ ĐỂ LẤY ADDRESS)
@@ -559,9 +563,9 @@ class FaceRegisterController extends GetxController {
       // await ApiService.syncRegistration(name, tempAllVectors);
 
       if (success) {
-        _handleResult(true, "Đã lưu offline và chờ đồng bộ: $name");
+        _handleResult(true, "Đã lưu, chờ đồng bộ: $name");
       } else {
-        Get.snackbar("Lỗi", "Lưu offline thất bại");
+        Get.snackbar("Lỗi", "Lưu thất bại");
         _resumeCamera();
       }
     } catch (e) {

@@ -26,22 +26,19 @@ class FaceRegisterView extends GetView<FaceRegisterController> {
             CameraPreview(controller.cameraController!),
 
             // 2. Vẽ khung
-            SizedBox.expand(
-              child: CustomPaint(
-                painter: FaceOverlayPainter(
-                  borderColor: controller.frameColor.value,
-                  progress: controller.scanProgress.value,
+            if (!controller.isRegistering.value && !controller.isSuccess.value)
+              SizedBox.expand(
+                child: CustomPaint(
+                  painter: FaceOverlayPainter(
+                    borderColor: controller.frameColor.value,
+                    progress: controller.scanProgress.value,
+                  ),
                 ),
               ),
-            ),
 
             // 3. Layer hướng dẫn (Text: Quay trái, quay phải...)
-            Obx(() {
-              if (controller.isRegistering.value) {
-                return const SizedBox.shrink(); // Đang xử lý thì ẩn đi
-              }
-
-              return Positioned(
+            if (!controller.isRegistering.value && !controller.isSuccess.value)
+              Positioned(
                 bottom: 60,
                 left: 20,
                 right: 20,
@@ -88,8 +85,7 @@ class FaceRegisterView extends GetView<FaceRegisterController> {
                     ),
                   ),
                 ),
-              );
-            }),
+              ),
 
             // 4. Loading Overlay (Chỉ hiện khi ĐANG xử lý đăng ký)
             if (controller.isRegistering.value)

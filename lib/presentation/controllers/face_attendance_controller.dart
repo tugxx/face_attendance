@@ -20,6 +20,8 @@ import '../../app/services/face_antispoofing_service.dart';
 import '../../app/services/face_smoothier_service.dart';
 import '../../app/services/log_service.dart';
 
+import "../../app/services/native_ai_service.dart" show RecognitionResult;
+
 class FaceCheckinState {
   // Biến cấu hình
   static const int requiredRecognitionStreak =
@@ -458,7 +460,7 @@ class FaceAttendanceController extends GetxController {
         _smoother.reset();
         if (checkinState.matchStreak > 0) {
           checkinState.matchStreak = 0;
-          AppLog.warning("❌ Face lost. Reset streak.");
+          // AppLog.warning("❌ Face lost. Reset streak.");
         }
         return;
       }
