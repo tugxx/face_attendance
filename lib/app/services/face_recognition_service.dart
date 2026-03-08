@@ -11,14 +11,6 @@ import 'package:flutter/services.dart';
 import '../services/log_service.dart';
 import '../services/native_ai_service.dart';
 
-// class RecognitionResult {
-//   final String name;
-//   final double distance;
-//   final bool isUnknown;
-
-//   RecognitionResult(this.name, this.distance, this.isUnknown);
-// }
-
 class FaceRecognitionService extends GetxService {
   // --- SINGLETON PATTERN --- (Chỉ tạo 1 instance duy nhất trong app)
   static final FaceRecognitionService _instance =

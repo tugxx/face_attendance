@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 
 import '../services/log_service.dart';
+import '../../data/models/registration_result.dart';
 
 class FaceProcessRequest {
   final Uint8List yuvBytes;
@@ -68,31 +69,12 @@ typedef ProcessFileRawDart =
       Pointer<Float> landmarks,
       Pointer<Float> output,
     );
-
-// C. Cho Spoofing
-// typedef ProcessFaceNative =
-//     Void Function(
-//       Pointer<Uint8> yuvBytes,
-//       Int32 width,
-//       Int32 height,
-//       Pointer<Float> landmarks,
-//       Int32 landmarkCount,
-//       Int32 rotation,
-//       Int32 targetWidth,
-//       Int32 targetHeight,
-//       Int32 modelType,
-//       Pointer<Float> output,
-//     );
-
 typedef ProcessFaceNative =
     Void Function(
       Pointer<Uint8> ptrYuv,
       Int32 width,
       Int32 height,
       Int32 yStride,
-      // Int32 uvStride,
-      // Pointer<Float> landmarks,
-      // Int32 landmarkCount,
       Int32 rectX,
       Int32 rectY,
       Int32 rectW,
@@ -100,23 +82,8 @@ typedef ProcessFaceNative =
       Int32 rotation,
       Int32 targetWidth,
       Int32 targetHeight,
-      // Int32 modelType,
       Pointer<Float> output,
     );
-
-// typedef ProcessFaceDart =
-//     void Function(
-//       Pointer<Uint8> yuvBytes,
-//       int width,
-//       int height,
-//       Pointer<Float> landmarks,
-//       int landmarkCount,
-//       int rotation,
-//       int targetWidth,
-//       int targetHeight,
-//       int modelType,
-//       Pointer<Float> output,
-//     );
 
 typedef ProcessFaceDart =
     void Function(
@@ -124,9 +91,6 @@ typedef ProcessFaceDart =
       int width,
       int height,
       int yStride,
-      // int uvStride,
-      // Pointer<Float> landmarks,
-      // int landmarkCount,
       int rectX,
       int rectY,
       int rectW,
@@ -134,8 +98,69 @@ typedef ProcessFaceDart =
       int rotation,
       int targetWidth,
       int targetHeight,
-      // int modelType,
       Pointer<Float> output,
+    );
+
+typedef ProcessFrameNativeC =
+    Int32 Function(
+      Pointer<Uint8> yuvData,
+      Int32 width,
+      Int32 height,
+      Pointer<Float> landmarks,
+      Int32 rotation,
+      Int32 rectX,
+      Int32 rectY,
+      Int32 rectW,
+      Int32 rectH,
+      Int32 spoofW,
+      Int32 spoofH,
+      Float threshold,
+      Pointer<Utf8> outName,
+      Pointer<Float> outDistance,
+      Pointer<Float> outSpoofScore,
+    );
+
+typedef ProcessFrameNativeDart =
+    int Function(
+      Pointer<Uint8> yuvData,
+      int width,
+      int height,
+      Pointer<Float> landmarks,
+      int rotation,
+      int rectX,
+      int rectY,
+      int rectW,
+      int rectH,
+      int spoofW,
+      int spoofH,
+      double threshold,
+      Pointer<Utf8> outName,
+      Pointer<Float> outDistance,
+      Pointer<Float> outSpoofScore,
+    );
+
+typedef ProcessRegistrationC =
+    Int32 Function(
+      Pointer<Uint8> yuvData,
+      Int32 width,
+      Int32 height,
+      Pointer<Float> landmarks,
+      Int32 rotation,
+      Pointer<Float> outAiPixels,
+      Pointer<Uint8> outJpgBytes,
+      Pointer<Int32> outJpgSize,
+    );
+
+typedef ProcessRegistrationDart =
+    int Function(
+      Pointer<Uint8> yuvData,
+      int width,
+      int height,
+      Pointer<Float> landmarks,
+      int rotation,
+      Pointer<Float> outAiPixels,
+      Pointer<Uint8> outJpgBytes,
+      Pointer<Int32> outJpgSize,
     );
 
 // ==========================================================
@@ -145,9 +170,13 @@ typedef ProcessFaceDart =
 class FaceProcessorNative {
   static DynamicLibrary? _lib;
 
-  static ProcessFaceAffineDart? _funcCamera;
+  // static ProcessFaceAffineDart? _funcCamera;
   static ProcessFileRawDart? _funcFile;
-  static ProcessFaceDart? _funcSpoof;
+  // static ProcessFaceDart? _funcSpoof;
+
+  static ProcessFrameNativeDart? _funcProcessFrame;
+
+  static ProcessRegistrationDart? _funcProcessRegistration;
 
   static void init() {
     if (_lib != null) return;
@@ -157,19 +186,20 @@ class FaceProcessorNative {
     final libName = Platform.isAndroid
         ? 'libnative_face_align.so'
         : 'native_face_align.framework/native_face_align';
+
     try {
       _lib = DynamicLibrary.open(libName);
 
-      // Load hàm Camera
-      try {
-        _funcCamera = _lib!
-            .lookup<NativeFunction<ProcessFaceAffineFunc>>(
-              'process_face_affine',
-            )
-            .asFunction();
-      } catch (_) {
-        AppLog.error("⚠️ Missing process_face_affine");
-      }
+      // // Load hàm Camera
+      // try {
+      //   _funcCamera = _lib!
+      //       .lookup<NativeFunction<ProcessFaceAffineFunc>>(
+      //         'process_face_affine',
+      //       )
+      //       .asFunction();
+      // } catch (_) {
+      //   AppLog.error("⚠️ Missing process_face_affine");
+      // }
 
       // Load hàm File (Mới)
       try {
@@ -182,12 +212,30 @@ class FaceProcessorNative {
         AppLog.error("⚠️ Missing process_file_affine_raw");
       }
 
+      // try {
+      //   _funcSpoof = _lib!
+      //       .lookup<NativeFunction<ProcessFaceNative>>('process_face_crop')
+      //       .asFunction();
+      // } catch (_) {
+      //   AppLog.error("⚠️ Missing spoofing");
+      // }
+
       try {
-        _funcSpoof = _lib!
-            .lookup<NativeFunction<ProcessFaceNative>>('process_face_crop')
-            .asFunction();
+        _funcProcessFrame = _lib!
+            .lookupFunction<ProcessFrameNativeC, ProcessFrameNativeDart>(
+              'ProcessFrameNative',
+            );
       } catch (_) {
         AppLog.error("⚠️ Missing spoofing");
+      }
+
+      try {
+        _funcProcessRegistration = _lib!
+            .lookupFunction<ProcessRegistrationC, ProcessRegistrationDart>(
+              'ProcessRegistrationNative',
+            );
+      } catch (e) {
+        AppLog.error("⚠️ Missing ProcessRegistrationNative: $e");
       }
 
       // AppLog.info("✅ Đã load thư viện C++ thành công: $libName");
@@ -240,44 +288,55 @@ class FaceProcessorNative {
     return ptr;
   }
 
-  static List<double>? processRegistration({
+  static RegistrationResult? processRegistration({
     required Pointer<Uint8> ptrYuv,
     required int width,
     required int height,
     required List<double> landmarks, // Nhận mảng số thực giống hệt Dual Task
     required int rotation,
   }) {
-    if (_funcCamera == null) init();
-    if (_funcCamera == null) return null;
+    if (_funcProcessRegistration == null) init();
 
     // 1. Chuyển List<double> landmarks thành Pointer<Float> cho C++
-    final Pointer<Float> ptrLandmarks = calloc<Float>(landmarks.length);
-    for (int i = 0; i < landmarks.length; i++) {
-      ptrLandmarks[i] = landmarks[i];
-    }
+    final Pointer<Float> ptrLandmarks = calloc<Float>(10);
+    ptrLandmarks.asTypedList(10).setAll(0, landmarks);
 
-    // // 2. Cấp phát bộ nhớ cho YUV (Copy dữ liệu ảnh sang C++)
-    // final Pointer<Uint8> ptrYuv = calloc<Uint8>(yuvBytes.length);
-    // ptrYuv.asTypedList(yuvBytes.length).setAll(0, yuvBytes);
-
-    // 3. Chuẩn bị Output
-    final int outLen = 112 * 112 * 3;
-    final Pointer<Float> ptrOut = calloc<Float>(outLen);
+    // Cấp 3 thùng chứa
+    final outAiPixels = calloc<Float>(112 * 112 * 3);
+    final outJpgBuffer = calloc<Uint8>(50000); // Thùng chứa JPG max 50KB
+    final outJpgSize = calloc<Int32>(1);
 
     try {
-      // 4. 🔥 GỌI C++
-      _funcCamera!(ptrYuv, width, height, ptrLandmarks, rotation, ptrOut);
+      final status = _funcProcessRegistration!(
+        ptrYuv,
+        width,
+        height,
+        ptrLandmarks,
+        rotation,
+        outAiPixels,
+        outJpgBuffer,
+        outJpgSize,
+      );
 
-      // 5. Lấy kết quả
-      final Float32List result = ptrOut.asTypedList(outLen);
-      return List<double>.from(result);
+      if (status == 0) return null;
+
+      // Hốt dữ liệu mang về
+      final aiList = Float32List.fromList(
+        outAiPixels.asTypedList(112 * 112 * 3),
+      );
+      final jpgBytes = Uint8List.fromList(
+        outJpgBuffer.asTypedList(outJpgSize.value),
+      );
+
+      return RegistrationResult(aiList, jpgBytes);
     } catch (e) {
       AppLog.error("Native Error: $e");
       return null;
     } finally {
-      // calloc.free(ptrYuv);
       calloc.free(ptrLandmarks);
-      calloc.free(ptrOut);
+      calloc.free(outAiPixels);
+      calloc.free(outJpgBuffer);
+      calloc.free(outJpgSize);
     }
   }
 
@@ -310,125 +369,78 @@ class FaceProcessorNative {
     }
   }
 
-  // static List<double>? processWithRawLandmarks(
-  //   Uint8List yuvBytes,
-  //   int width,
-  //   int height,
-  //   List<double> landmarksList, // Nhận List trực tiếp
-  //   int rotation,
-  // ) {
-  //   if (_funcCamera == null) init();
-  //   if (_funcCamera == null) return null;
+  // static Map<String, List<double>?> processDualTask({
+  //   required Pointer<Uint8> ptrYuv,
+  //   required int width,
+  //   required int height,
+  //   required int yStride,
+  //   required List<double> landmarks,
+  //   required int rotation,
+  //   required int rectX,
+  //   required int rectY,
+  //   required int rectW,
+  //   required int rectH,
+  //   required int spoofWidth,
+  //   required int spoofHeight,
+  // }) {
+  //   if (_funcCamera == null || _funcSpoof == null) init();
 
-  //   // Cấp phát Landmark từ List có sẵn
-  //   final Pointer<Float> ptrLandmarks = calloc<Float>(10);
-  //   final list = ptrLandmarks.asTypedList(10);
-  //   list.setAll(0, landmarksList);
+  //   // // 1. Cấp phát YUV duy nhất 1 lần cho cả 2 task
+  //   // final ptrYuv = calloc<Uint8>(yuvBytes.length);
+  //   // ptrYuv.asTypedList(yuvBytes.length).setAll(0, yuvBytes);
 
-  //   // Cấp phát YUV
-  //   final Pointer<Uint8> ptrYuv = calloc<Uint8>(yuvBytes.length);
-  //   ptrYuv.asTypedList(yuvBytes.length).setAll(0, yuvBytes);
+  //   // 2. Cấp phát Landmark
+  //   final ptrLandmarks = calloc<Float>(10);
+  //   ptrLandmarks.asTypedList(10).setAll(0, landmarks);
 
-  //   final int outLen = 112 * 112 * 3;
-  //   final Pointer<Float> ptrOut = calloc<Float>(outLen);
+  //   // 3. Chuẩn bị Buffer đầu ra cho cả 2
+  //   final int recogLen = 112 * 112 * 3;
+  //   final ptrOutRecog = calloc<Float>(recogLen);
 
-  //   try {
-  //     _funcCamera!(ptrYuv, width, height, ptrLandmarks, rotation, ptrOut);
-  //     final Float32List result = ptrOut.asTypedList(outLen);
-  //     return List<double>.from(result);
-  //   } catch (e) {
-  //     return null;
-  //   } finally {
-  //     calloc.free(ptrYuv);
-  //     calloc.free(ptrLandmarks);
-  //     calloc.free(ptrOut);
-  //   }
-  // }
-
-  // static List<double>? processAntiSpoofRaw(
-  //   Uint8List yuvBytes,
-  //   int width,
-  //   int height,
-  //   List<double> landmarks, // Dùng landmarks để lấy box (hoặc truyền box riêng)
-  //   int rotation,
-  //   int targetSize,
-  // ) {
-  //   if (_funcSpoof == null) init();
-
-  //   // Lưu ý: Hàm C++ process_antispoof_crop đang nhận x, y, w, h
-  //   // Ta cần tính Box bao quanh các landmark để làm input cho nó
-  //   // (Hoặc sửa C++ để nhận landmarks luôn).
-  //   // Ở đây ta tính nhanh box từ landmarks:
-
-  //   double minX = 10000, minY = 10000, maxX = 0, maxY = 0;
-
-  //   // Landmarks có 5 điểm (10 số)
-  //   for (int i = 0; i < 10; i += 2) {
-  //     double lx = landmarks[i];
-  //     double ly = landmarks[i + 1];
-  //     if (lx < minX) minX = lx;
-  //     if (lx > maxX) maxX = lx;
-  //     if (ly < minY) minY = ly;
-  //     if (ly > maxY) maxY = ly;
-  //   }
-
-  //   // Box thô (chưa padding)
-  //   double wData = maxX - minX;
-  //   double hData = maxY - minY;
-
-  //   // Theo kinh nghiệm cộng đồng: Landmarks 5 điểm thường hẹp hơn Box thật của Face Detector.
-  //   // Ta cần padding nhẹ để Box này tương đương với Box của Face Detection.
-  //   int cx = (minX + wData / 2).toInt();
-  //   int cy = (minY + hData / 2).toInt();
-
-  //   // Giả lập Box Detection từ Landmarks (mở rộng khoảng 1.5 lần so với cụm mắt mũi miệng)
-  //   int wBox = (wData * 1.5).toInt();
-  //   int hBox = (hData * 1.5).toInt();
-
-  //   int x = cx - (wBox ~/ 2);
-  //   int y = cy - (hBox ~/ 2);
-
-  //   // -------------------------------------------------------------
-  //   // BƯỚC 2: GỌI C++ ĐỂ CROP & SCALE (Logic Scale 2.7 nằm trong C++)
-  //   // -------------------------------------------------------------
-
-  //   final Pointer<Uint8> ptrYuv = calloc<Uint8>(yuvBytes.length);
-  //   ptrYuv.asTypedList(yuvBytes.length).setAll(0, yuvBytes);
-
-  //   final int outLen = targetSize * targetSize * 3;
-  //   final Pointer<Float> ptrOut = calloc<Float>(outLen);
+  //   final int spoofLen = spoofWidth * spoofHeight * 3;
+  //   final ptrOutSpoof = calloc<Float>(spoofLen);
 
   //   try {
+  //     // TASK 1: Gọi hàm Affine (Recognition)
+  //     _funcCamera!(ptrYuv, width, height, ptrLandmarks, rotation, ptrOutRecog);
+
+  //     // TASK 2: Gọi Spoof
   //     _funcSpoof!(
   //       ptrYuv,
   //       width,
   //       height,
-  //       x,
-  //       y,
-  //       wBox,
-  //       hBox,
+  //       yStride,
   //       rotation,
-  //       targetSize,
-  //       targetSize,
-  //       ptrOut,
+  //       rectX,
+  //       rectY,
+  //       rectW,
+  //       rectH,
+  //       spoofWidth,
+  //       spoofHeight,
+  //       ptrOutSpoof,
   //     );
 
-  //     final Float32List result = ptrOut.asTypedList(outLen);
-  //     return List<double>.from(result);
+  //     // 4. Gom kết quả
+  //     return {
+  //       'recog': Float32List.fromList(ptrOutRecog.asTypedList(recogLen)),
+  //       'spoof': Float32List.fromList(ptrOutSpoof.asTypedList(spoofLen)),
+  //     };
   //   } catch (e) {
-  //     return null;
+  //     AppLog.error("Dual Task Error: $e");
+  //     return {'recog': null, 'spoof': null};
   //   } finally {
-  //     calloc.free(ptrYuv);
-  //     calloc.free(ptrOut);
+  //     // 5. Giải phóng toàn bộ 1 lượt
+  //     calloc.free(ptrLandmarks);
+  //     calloc.free(ptrOutRecog);
+  //     calloc.free(ptrOutSpoof);
   //   }
   // }
 
-  static Map<String, List<double>?> processDualTask({
+  static Map<String, dynamic>? processDualTask({
     required Pointer<Uint8> ptrYuv,
     required int width,
     required int height,
     required int yStride,
-    // required int uvStride,
     required List<double> landmarks,
     required int rotation,
     required int rectX,
@@ -437,36 +449,24 @@ class FaceProcessorNative {
     required int rectH,
     required int spoofWidth,
     required int spoofHeight,
-    // required int spoofModelType,
+    required double threshold,
   }) {
-    if (_funcCamera == null || _funcSpoof == null) init();
+    if (_funcProcessFrame == null) init();
 
-    // // 1. Cấp phát YUV duy nhất 1 lần cho cả 2 task
-    // final ptrYuv = calloc<Uint8>(yuvBytes.length);
-    // ptrYuv.asTypedList(yuvBytes.length).setAll(0, yuvBytes);
-
-    // 2. Cấp phát Landmark
     final ptrLandmarks = calloc<Float>(10);
     ptrLandmarks.asTypedList(10).setAll(0, landmarks);
 
-    // 3. Chuẩn bị Buffer đầu ra cho cả 2
-    final int recogLen = 112 * 112 * 3;
-    final ptrOutRecog = calloc<Float>(recogLen);
-
-    final int spoofLen = spoofWidth * spoofHeight * 3;
-    final ptrOutSpoof = calloc<Float>(spoofLen);
+    // Thùng rỗng hứng kết quả
+    final outNamePtr = calloc<Uint8>(256).cast<Utf8>();
+    final outDistPtr = calloc<Float>(1);
+    final outSpoofPtr = calloc<Float>(1);
 
     try {
-      // TASK 1: Gọi hàm Affine (Recognition)
-      _funcCamera!(ptrYuv, width, height, ptrLandmarks, rotation, ptrOutRecog);
-
-      // TASK 2: Gọi Spoof
-      _funcSpoof!(
+      final status = _funcProcessFrame!(
         ptrYuv,
         width,
         height,
-        yStride,
-        // uvStride,
+        ptrLandmarks,
         rotation,
         rectX,
         rectY,
@@ -474,43 +474,29 @@ class FaceProcessorNative {
         rectH,
         spoofWidth,
         spoofHeight,
-        ptrOutSpoof,
+        threshold,
+        outNamePtr,
+        outDistPtr,
+        outSpoofPtr,
       );
 
-      // 4. Gom kết quả
+      if (status == 0) return null;
+
+      final name = outNamePtr.toDartString();
+      final isUnknown = (status == 2);
+
+      // Trả về thông tin ngắn gọn
       return {
-        'recog': Float32List.fromList(ptrOutRecog.asTypedList(recogLen)),
-        'spoof': Float32List.fromList(ptrOutSpoof.asTypedList(spoofLen)),
+        'name': name,
+        'distance': outDistPtr.value,
+        'isUnknown': isUnknown,
+        'spoofScore': outSpoofPtr.value,
       };
-    } catch (e) {
-      AppLog.error("Dual Task Error: $e");
-      return {'recog': null, 'spoof': null};
     } finally {
-      // 5. Giải phóng toàn bộ 1 lượt
       calloc.free(ptrLandmarks);
-      calloc.free(ptrOutRecog);
-      calloc.free(ptrOutSpoof);
+      calloc.free(outNamePtr);
+      calloc.free(outDistPtr);
+      calloc.free(outSpoofPtr);
     }
   }
 }
-
-// Future<List<double>?> isolateFaceProcessor(FaceProcessRequest request) async {
-//   // 1. Khởi tạo môi trường cho Isolate (Bắt buộc để dùng các platform channel nếu cần)
-//   if (request.rootToken != null) {
-//     BackgroundIsolateBinaryMessenger.ensureInitialized(request.rootToken!);
-//   }
-
-//   try {
-//     // YUV -> RGB -> Rotate -> Crop -> Resize -> Normalize
-//     return FaceProcessorNative.process(
-//       request.yuvBytes,
-//       request.width,
-//       request.height,
-//       request.face, // Truyền thẳng object Face
-//       request.sensorOrientation,
-//     );
-//   } catch (e) {
-//     AppLog.error("❌ Isolate Error: $e");
-//     return null;
-//   }
-// }

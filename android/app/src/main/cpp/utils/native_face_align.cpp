@@ -13,8 +13,11 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
+// #define STB_IMAGE_RESIZE_IMPLEMENTATION
+// #include "stb_image_resize.h"
+
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
-#include "stb_image_resize.h"
+#include "stb_image_resize2.h"
 
 // #include "tensorflow/lite/c/c_api.h"
 // #define LOGI(...) \
@@ -329,7 +332,7 @@ extern "C" __attribute__((visibility("default"))) __attribute__((used)) {
     float cy = rY + rH / 2.0f;
 
     // Scale
-    float scale = 2.7f;
+    float scale = 2.0f;
     int crop_height = (int)(rH * scale);
     // int crop_width = (int)(crop_height * 1.0f / 1.35f);
     int crop_width = (int)(rW * scale);
@@ -378,11 +381,19 @@ extern "C" __attribute__((visibility("default"))) __attribute__((used)) {
     // --- BƯỚC 3: RESIZE (DÙNG THƯ VIỆN STB) ---
     std::vector<uint8_t> resized_rgb(target_width * target_height * 3);
 
-    // stbir_resize_uint8(input_data, input_w, input_h, input_stride,
-    //                    output_data, output_w, output_h, output_stride,
-    //                    num_channels)
-    stbir_resize_uint8(raw_crop_rgb.data(), real_crop_w, real_crop_h, 0,
-                       resized_rgb.data(), target_width, target_height, 0, 3);
+    // // stbir_resize_uint8(input_data, input_w, input_h, input_stride,
+    // //                    output_data, output_w, output_h, output_stride,
+    // //                    num_channels)
+    // stbir_resize_uint8(raw_crop_rgb.data(), real_crop_w, real_crop_h, 0,
+    //                    resized_rgb.data(), target_width, target_height, 0,
+    //                    3);
+
+    // Dùng hàm _linear hoặc _srgb của v2, truyền thêm STBIR_RGB
+    stbir_resize_uint8_linear(raw_crop_rgb.data(), real_crop_w, real_crop_h, 0,
+                              resized_rgb.data(), target_width, target_height,
+                              0,
+                              STBIR_RGB // Khai báo rõ đây là ảnh 3 kênh RGB
+    );
 
     // // Chuẩn ImageNet (RGB)
     // float norm_mean[] = {0.485f, 0.456f, 0.406f};

@@ -474,6 +474,10 @@ class FaceRegisterController extends GetxController {
     // isRegistering.value = true;
     _stableFrameCount = 0;
 
+    // AppLog.info(
+    //   "📸 CHỤP THÀNH CÔNG GÓC SỐ: ${registrationStep.value} | Góc xoay Y (trái/phải): ${face.headEulerAngleY}",
+    // );
+
     // await cameraController?.stopImageStream();
 
     try {
