@@ -1,15 +1,19 @@
-// import 'package:face_attendance/app/services/log_service.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
-import 'app/config/app_pages.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 
-// import 'app/services/face_isolate_service.dart';
+import 'routes/app_pages.dart';
+import 'app/services/log_service.dart';
+import 'app/extensions/app_profiler.dart';
 
-void main() {
-  // final stopwatch = Stopwatch()..start();
-
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // AppLog.info("⏱️ [DEBUG]: Bắt đầu chạy main()");
+  AppLog.info("⏱️ [DEBUG]: Bắt đầu chạy main()");
+
+  // 1. Khởi tạo Hive một lần duy nhất cho toàn App
+  await AppProfiler.measureAsync('Hive init', () async {
+    await Hive.initFlutter();
+  });
 
   runApp(
     GetMaterialApp(
@@ -17,14 +21,8 @@ void main() {
       debugShowCheckedModeBanner: false,
       initialRoute: AppPages.initial, // Bắt đầu từ Route này
       getPages: AppPages.routes, // Nạp danh sách routes
-      theme: ThemeData.dark(),
+      theme: ThemeData.light(),
+      themeMode: ThemeMode.light,
     ),
   );
-
-  // testCPlusPlusLink();
-
-  // stopwatch.stop();
-  // AppLog.info(
-  //   "⏱️ [DEBUG]: Gọi runApp xong tốn tổng cộng: ${stopwatch.elapsedMilliseconds} ms",
-  // );
 }

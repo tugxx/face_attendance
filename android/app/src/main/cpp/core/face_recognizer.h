@@ -46,4 +46,6 @@ public:
 
   RecognitionResult PredictFace(const float *inputPixels, int pixelsCount,
                                 float threshold);
+
+  void RemoveFace(const char *name);
 };

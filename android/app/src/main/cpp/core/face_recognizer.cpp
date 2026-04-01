@@ -152,3 +152,15 @@ RecognitionResult FaceRecognizer::PredictFace(const float *inputPixels,
 
   return result;
 }
+
+// 1. Thêm vào class FaceRecognizer
+void FaceRecognizer::RemoveFace(const char *name) {
+  // Tìm và xóa đúng ID đó khỏi Map, không đụng đến 4999 người còn lại
+  faceDatabase.erase(std::string(name));
+}
+
+// 2. Thêm hàm FFI để Dart gọi xuống
+extern "C" __attribute__((visibility("default"))) __attribute__((used)) void
+RemoveFace(const char *name) {
+  FaceRecognizer::GetInstance()->RemoveFace(name);
+}

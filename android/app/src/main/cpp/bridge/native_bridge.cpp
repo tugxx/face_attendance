@@ -6,6 +6,7 @@
 #include "stb_image_write.h"
 
 #include "anti_spoofing.h"
+#include "face_quality.h"
 #include "face_recognizer.h"
 
 // ==========================================
@@ -83,15 +84,89 @@ PredictSpoofNative(const float *inputPixels, int pixelsCount) {
 }
 
 // ==========================================
+// LUỒNG FACE QUALITY ASSESSMENT
+// ==========================================
+
+extern "C" __attribute__((visibility("default"))) __attribute__((used)) int
+InitQualityModelNative(const void *modelData, int modelSize) {
+  return FaceQuality::GetInstance()->InitQualityModel(modelData, modelSize) ? 1
+                                                                            : 0;
+}
+
+extern "C" __attribute__((visibility("default"))) __attribute__((used)) float
+PredictQualityNative(const float *inputPixels, int pixelsCount) {
+  return FaceQuality::GetInstance()->PredictQuality(inputPixels, pixelsCount);
+}
+
+extern "C" void process_face_affine(uint8_t *yuvBytes, int width, int height,
+                                    float *landmarks, int rotation,
+                                    float *outputBuffer);
+extern "C" void process_face_crop(uint8_t *yuvPtr, int width, int height,
+                                  int yStride, int rotation, int rX, int rY,
+                                  int rW, int rH, int target_width,
+                                  int target_height, float scale, bool is_bgr,
+                                  float *outputBuffer);
+
+// ==========================================
+// LUỒNG CHẤM ĐIỂM ĐỘ NÉT KHUÔN MẶT
+// ==========================================
+
+extern "C" __attribute__((visibility("default"))) __attribute__((used)) float
+ProcessQualityNative(const unsigned char *yuvData, int width, int height,
+                     int rotation, int rectX, int rectY, int rectW, int rectH) {
+
+  int qualityW = 96;
+  int qualityH = 96;
+  int qualitySize = qualityW * qualityH * 3;
+
+  // Cấp phát RAM cho ảnh 96x96
+  float *qualityBuffer = (float *)malloc(qualitySize * sizeof(float));
+  if (!qualityBuffer)
+    return -1.0f;
+
+  // Cắt khuôn mặt từ YUV, resize về 96x96
+  // (Giả sử process_face_crop của bạn đang xuất ra giá trị float trong dải
+  // [-1.0, 1.0])
+  process_face_crop((uint8_t *)yuvData, width, height, width, rotation, rectX,
+                    rectY, rectW, rectH, qualityW, qualityH, 1.2f, false,
+                    qualityBuffer);
+
+  // TIỀN XỬ LÝ CHO LIGHTQNET
+  // Nếu LightQNet yêu cầu input dải [0.0, 1.0], ta phải chuẩn hóa lại mảng
+  for (int i = 0; i < qualitySize; i++) {
+    // Đưa từ [-1.0, 1.0] về [0.0, 1.0]
+    qualityBuffer[i] = (qualityBuffer[i] - 128.0f) / 128.0f;
+  }
+
+  // Chạy AI chấm điểm độ nét
+  float score =
+      FaceQuality::GetInstance()->PredictQuality(qualityBuffer, qualitySize);
+
+  free(qualityBuffer);
+  return score;
+}
+
+// ==========================================
 // LUỒNG DUAL TASK (CROP + AI RECOGNITION + ANTI SPOOFING)
 // Hàm này làm TẤT CẢ mọi việc trong 1 lần gọi
 // ==========================================
+
 extern "C" __attribute__((visibility("default"))) __attribute__((used)) int
 ProcessFrameNative(const unsigned char *yuvData, int width, int height,
                    const float *landmarks, int rotation, int rectX, int rectY,
                    int rectW, int rectH, int spoofW, int spoofH,
                    float threshold, char *outName, float *outDistance,
-                   float *outSpoofScore) {
+                   float *outSpoofScore, float *outQualityScore) {
+
+  float qualityScore = ProcessQualityNative(yuvData, width, height, rotation,
+                                            rectX, rectY, rectW, rectH);
+
+  *outQualityScore = qualityScore;
+
+  // NẾU ẢNH MỜ -> THOÁT SỚM
+  if (qualityScore < 0.4f) {
+    return 3;
+  }
 
   // 1. Cấp phát bộ nhớ đệm để chứa ảnh đã cắt (112x112 và 80x80)
   int recogSize = 112 * 112 * 3;
@@ -111,20 +186,13 @@ ProcessFrameNative(const unsigned char *yuvData, int width, int height,
   }
 
   // 2. Khai báo chuẩn tên hàm từ file native_face_align
-  extern void process_face_affine(uint8_t * yuvBytes, int width, int height,
-                                  float *landmarks, int rotation,
-                                  float *outputBuffer);
-  extern void process_face_crop(uint8_t * yuvPtr, int width, int height,
-                                int yStride, int rotation, int rX, int rY,
-                                int rW, int rH, int target_width,
-                                int target_height, float *outputBuffer);
-
   process_face_affine((uint8_t *)yuvData, width, height, (float *)landmarks,
                       rotation, recogBuffer);
 
   // Y Stride mặc định bằng Width cho YUV420
   process_face_crop((uint8_t *)yuvData, width, height, width, rotation, rectX,
-                    rectY, rectW, rectH, spoofW, spoofH, spoofBuffer);
+                    rectY, rectW, rectH, spoofW, spoofH, 2.0f, true,
+                    spoofBuffer);
 
   // 3. Chạy AI Nhận Diện
   RecognitionResult res = FaceRecognizer::GetInstance()->PredictFace(
@@ -154,6 +222,8 @@ ProcessFrameNative(const unsigned char *yuvData, int width, int height,
 // LUỒNG ĐĂNG KÝ KHUÔN MẶT
 // ==========================================
 
+extern "C" void process_face_affine(uint8_t *, int, int, float *, int, float *);
+
 // Struct để hứng byte của JPG nén ra
 struct MemWriter {
   unsigned char *buffer;
@@ -178,7 +248,6 @@ ProcessRegistrationNative(const unsigned char *yuvData, int width, int height,
   int recogSize = 112 * 112 * 3;
 
   // 1. Cắt ảnh bằng hàm cũ của bạn (Lấy float -1.0 đến 1.0)
-  extern void process_face_affine(uint8_t *, int, int, float *, int, float *);
   process_face_affine((uint8_t *)yuvData, width, height, (float *)landmarks,
                       rotation, outAiPixels);
 
@@ -199,5 +268,57 @@ ProcessRegistrationNative(const unsigned char *yuvData, int width, int height,
   *outJpgSize = mw.length; // Báo cho Dart biết file JPG nặng bao nhiêu byte
 
   free(rgbPixels);
+  return 1;
+}
+
+// ==========================================
+// LUỒNG GỬI ẢNH CHỤP KHUÔN MẶT
+// ==========================================
+
+extern "C" void get_pixel_yuv_rotated(const uint8_t *yuv, int width, int height,
+                                      int stride, int x, int y, int rotation,
+                                      uint8_t *r, uint8_t *g, uint8_t *b);
+
+// Callback để stb ghi byte JPEG vào RAM thay vì ghi ra file cứng
+void stbi_write_mem(void *context, void *data, int size) {
+  std::vector<uint8_t> *buffer = (std::vector<uint8_t> *)context;
+  buffer->insert(buffer->end(), (uint8_t *)data, (uint8_t *)data + size);
+}
+
+// HÀM MỚI TOANH: Chỉ nhận YUV gốc và trả ra mảng Byte JPEG
+extern "C" __attribute__((visibility("default"))) __attribute__((used)) int
+EncodeFullFrameToJpeg(const unsigned char *yuvData, int width, int height,
+                      int rotation, unsigned char **outJpegData,
+                      int *outJpegSize) {
+
+  // Tùy góc xoay camera mà chiều ngang/dọc sẽ đổi chỗ
+  int logical_w = (rotation == 90 || rotation == 270) ? height : width;
+  int logical_h = (rotation == 90 || rotation == 270) ? width : height;
+
+  std::vector<uint8_t> rgb(logical_w * logical_h * 3);
+
+  // Convert toàn bộ khung hình YUV -> RGB
+  int idx = 0;
+  for (int y = 0; y < logical_h; y++) {
+    for (int x = 0; x < logical_w; x++) {
+      uint8_t r, g, b;
+      get_pixel_yuv_rotated(yuvData, width, height, width, x, y, rotation, &r,
+                            &g, &b);
+      rgb[idx++] = r;
+      rgb[idx++] = g;
+      rgb[idx++] = b;
+    }
+  }
+
+  // Dùng stb nén RGB thành mảng byte JPEG siêu nhẹ (Quality = 85%)
+  std::vector<uint8_t> jpegBuf;
+  stbi_write_jpg_to_func(stbi_write_mem, &jpegBuf, logical_w, logical_h, 3,
+                         rgb.data(), 85);
+
+  // Bắn mảng byte đó lên cho Dart
+  *outJpegSize = jpegBuf.size();
+  *outJpegData = (unsigned char *)malloc(*outJpegSize);
+  memcpy(*outJpegData, jpegBuf.data(), *outJpegSize);
+
   return 1;
 }

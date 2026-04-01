@@ -47,19 +47,9 @@ class HomeView extends GetView<HomeController> {
                     color: Colors.orange,
                     onTap: controller.goToRegister,
                   ),
-
                   const SizedBox(height: 20),
 
-                  // // 2. NÚT DEBUG (Màn hình hiện tại của bạn)
-                  // _buildMenuCard(
-                  //   icon: Icons.developer_mode,
-                  //   title: "Debug / Kiểm tra",
-                  //   subtitle: "Xem bounding box & thông số AI",
-                  //   color: Colors.grey[800]!,
-                  //   onTap: controller.goToDebug,
-                  // ),
                   const SizedBox(height: 20),
-
                   // 3. NÚT CHẤM CÔNG
                   _buildMenuCard(
                     icon: Icons.fact_check,

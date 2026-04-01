@@ -318,8 +318,8 @@ extern "C" __attribute__((visibility("default"))) __attribute__((used)) {
   // --------------------------------------------------------
   void process_face_crop(uint8_t * yuvPtr, int width, int height, int yStride,
                          int rotation, int rX, int rY, int rW, int rH,
-                         int target_width, int target_height,
-                         float *outputBuffer) {
+                         int target_width, int target_height, float scale,
+                         bool is_bgr, float *outputBuffer) {
     int logical_w = width;
     int logical_h = height;
     if (rotation == 90 || rotation == 270) {
@@ -331,8 +331,6 @@ extern "C" __attribute__((visibility("default"))) __attribute__((used)) {
     float cx = rX + rW / 2.0f;
     float cy = rY + rH / 2.0f;
 
-    // Scale
-    float scale = 2.0f;
     int crop_height = (int)(rH * scale);
     // int crop_width = (int)(crop_height * 1.0f / 1.35f);
     int crop_width = (int)(rW * scale);
@@ -412,10 +410,20 @@ extern "C" __attribute__((visibility("default"))) __attribute__((used)) {
       // r_byte = b_byte;
       // b_byte = tmp; // Swap R <-> B for BGR
 
-      // Ghi tuần tự vào outputBuffer theo thứ tự B, G, R
-      outputBuffer[pIdx++] = (float)b_byte;
-      outputBuffer[pIdx++] = (float)g_byte;
-      outputBuffer[pIdx++] = (float)r_byte;
+      // // Ghi tuần tự vào outputBuffer theo thứ tự B, G, R
+      // outputBuffer[pIdx++] = (float)b_byte;
+      // outputBuffer[pIdx++] = (float)g_byte;
+      // outputBuffer[pIdx++] = (float)r_byte;
+
+      if (is_bgr) {
+          outputBuffer[pIdx++] = (float)b_byte;
+          outputBuffer[pIdx++] = (float)g_byte;
+          outputBuffer[pIdx++] = (float)r_byte;
+      } else {
+          outputBuffer[pIdx++] = (float)r_byte;
+          outputBuffer[pIdx++] = (float)g_byte;
+          outputBuffer[pIdx++] = (float)b_byte;
+      }
     }
   }
 }

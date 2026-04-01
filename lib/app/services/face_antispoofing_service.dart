@@ -17,16 +17,11 @@ class FaceAntiSpoofingService extends GetxService {
   factory FaceAntiSpoofingService() => _instance;
   FaceAntiSpoofingService._internal();
 
-  // --- CẤU HÌNH --- Model MiniFASNetV2: Input 80x80
   static const String _modelPath = 'assets/models/fasnet_float32.tflite';
 
   // Ngưỡng tin cậy
   static const double _threshold = 0.6;
 
-  // // --- STATE ---
-  // Interpreter? _interpreter;
-
-  // Model MiniFASNetV2 yêu cầu Input cứng là 80x80
   final int _inputWidth = 80;
   final int _inputHeight = 80;
 

@@ -3,15 +3,17 @@ import 'dart:ffi';
 import 'dart:math' as math;
 import 'dart:async';
 
+import 'package:uuid/uuid.dart';
 import 'package:ffi/ffi.dart';
 import 'package:camera/camera.dart';
 // import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:permission_handler/permission_handler.dart';
-// import 'package:path_provider/path_provider.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/services.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 
 import '../../app/utils/camera_utils.dart';
 import '../../app/services/face_recognition_service.dart';
@@ -19,6 +21,10 @@ import '../../app/services/face_isolate_service.dart';
 import '../../app/services/face_antispoofing_service.dart';
 import '../../app/services/face_smoothier_service.dart';
 import '../../app/services/log_service.dart';
+import '../../app/services/web_socket_service.dart';
+import '../../app/types/face_pipeline.dart';
+import '../../app/services/sync_service.dart';
+import '../../app/services/device_service.dart';
 
 class FaceCheckinState {
   // Biến cấu hình
@@ -33,6 +39,8 @@ class FaceCheckinState {
   int spoofStreak = 0; // Đếm số lần phát hiện giả mạo liên tiếp
   int livenessStreak = 0; // Đếm số lần liveness pass liên tiếp
   bool isSuccessCooldown = false; // Chế độ chờ sau khi điểm danh thành công
+
+  int blurryStreak = 0;
 
   void reset() {
     currentCandidate = null;
@@ -58,6 +66,8 @@ class FaceAttendanceController extends GetxController {
 
   final AudioPlayer _audioPlayer = AudioPlayer();
 
+  // StreamSubscription<List<ConnectivityResult>>? _networkSubscription;
+
   var isInitialized = false.obs; // Cờ báo hiệu Camera đã bật chưa.
   var recognizedName = "Unknown".obs;
   // Cái "khóa" (Lock/Semaphore) để ngăn không cho xử lý quá nhiều frame cùng lúc (tránh tràn RAM).
@@ -70,12 +80,17 @@ class FaceAttendanceController extends GetxController {
   late FaceDetector _faceDetector;
   var detectedFaces = <Face>[].obs;
 
+  DateTime _lastBlurWarningTime = DateTime.now();
+
   CameraDescription? _currentCamera;
 
   var faceInstruction = "".obs;
 
   Pointer<Uint8>? nativeBuffer;
   int _currentBufferSize = 0;
+
+  Map<int, String> verifiedFaces = {};
+  final Map<int, int> _faceAttempts = {};
 
   // ------------------------------------------------------
   // HELPER
@@ -157,7 +172,12 @@ class FaceAttendanceController extends GetxController {
   //   return null;
   // }
 
-  Future<void> _handleCheckinSuccess(String name) async {
+  Future<void> _handleCheckinSuccess({
+    required String studentId,
+    required double confidence,
+    required double livenessScore,
+    String? localImagePath, // Có thể làm tính năng lưu ảnh sau
+  }) async {
     checkinState.isSuccessCooldown = true; // Khóa hệ thống
 
     await _audioPlayer.setVolume(1.0);
@@ -169,14 +189,41 @@ class FaceAttendanceController extends GetxController {
 
     HapticFeedback.vibrate();
 
-    // AppLog.info("🎉 CHECKIN SUCCESS: $name");
+    AppLog.info("🎉 CHECKIN SUCCESS: $studentId");
 
-    recognizedName.value = name;
+    recognizedName.value = studentId;
 
-    // TODO: Gửi API log lên server tại đây...
+    // 1. Sinh UUID tại App
+    final String recordUuid = const Uuid().v4();
+
+    // 2. Gom dữ liệu chuẩn Thực tế
+    Map<String, dynamic> offlineLog = {
+      "id": recordUuid,
+      "student_id": studentId,
+      "device_id": DeviceService().deviceId,
+      "timestamp": DateTime.now()
+          .toUtc()
+          .toIso8601String(), // Luôn dùng chuẩn UTC
+      "confidence": confidence, // Ví dụ: 0.89 (89%)
+      "liveness_score": livenessScore, // Ví dụ: 0.99 (99% là người thật)
+      "sync_status": "PENDING", // Trạng thái chờ đồng bộ
+      "image_path": localImagePath, // Nơi lưu ảnh offline trên điện thoại
+    };
+
+    final attendanceBox = Hive.box('AttendanceBox');
+    await attendanceBox.put(recordUuid, offlineLog);
+
+    final socketPayload = Map<String, dynamic>.from(offlineLog)
+      ..remove('sync_status')
+      ..remove('image_path');
+
+    // 3. Bắn thẳng qua WebSocket
+    WebSocketService().sendCheckinData(socketPayload);
 
     // Wait 3 giây rồi reset (Logic Python: success_mode active duration)
     await Future.delayed(const Duration(seconds: 3));
+
+    SyncService().syncPendingRecords();
 
     recognizedName.value = "Unknown";
     checkinState.reset();
@@ -218,6 +265,7 @@ class FaceAttendanceController extends GetxController {
           // QUAN TRỌNG: Dùng để căn chỉnh (align) khuôn mặt cho thẳng trước khi đưa vào AI nhận diện.
           enableLandmarks: true,
           enableClassification: false,
+          enableTracking: true,
           minFaceSize: 0.15,
         ),
       );
@@ -313,29 +361,35 @@ class FaceAttendanceController extends GetxController {
     // Khoá luồng xử lý nhận diện
     isProcessing.value = true;
 
-    // ⏱️ BẮT ĐẦU ĐỒNG HỒ
-    final Stopwatch sw = Stopwatch()..start();
-
     Face? face;
 
     try {
       // 1. Detect khuôn mặt (ML Kit - Giữ nguyên)
       face = await _detectFaceFromImage(image);
 
-      int tDetect = sw.elapsedMilliseconds;
-
       // Nếu không có mặt -> Dừng
-      if (face == null) {
+      if (face == null || face.trackingId == null) {
         _smoother.reset();
         if (checkinState.matchStreak > 0) {
           checkinState.matchStreak = 0;
+          checkinState.blurryStreak = 0;
           // AppLog.warning("❌ Face lost. Reset streak.");
         }
         return;
       }
 
-      // Log Detect (Nên < 80ms)
-      AppLog.info("1️⃣ Detect: ${tDetect}ms");
+      int currentFaceId = face.trackingId!;
+      if (_faceAttempts[currentFaceId] == null) {
+        checkinState.matchStreak = 0;
+        checkinState.spoofStreak = 0;
+        checkinState.blurryStreak = 0; // Xóa sạch tàn dư của người trước!
+        if (faceInstruction.value.isNotEmpty) faceInstruction.value = "";
+      }
+      final faceRect = _smoother.smooth(face.boundingBox);
+
+      if (verifiedFaces.containsKey(currentFaceId)) {
+        return; // Đã check-in rồi thì cho CPU nghỉ ngơi
+      }
 
       // 2. Throttling (Giữ nguyên)
       if (_shouldSkipRecognition()) {
@@ -363,11 +417,6 @@ class FaceAttendanceController extends GetxController {
         offset += plane.bytes.length;
       }
 
-      final faceRect = _smoother.smooth(face.boundingBox);
-
-      // Đo thời gian bắt đầu gửi
-      int tStartNative = sw.elapsedMilliseconds;
-
       // 4. Gửi sang Isolate
       // AppLog.info("🚀 Gửi ảnh YUV xuống C++ (Crop + Face + Spoof)...");
 
@@ -387,32 +436,85 @@ class FaceAttendanceController extends GetxController {
             threshold: _recognitionService.threshold,
           );
 
-      int tNative = sw.elapsedMilliseconds - tStartNative;
-      AppLog.info("2️⃣ Xử lý Native C++ (All-in-One): $tNative ms");
-
-      if (aiResult == null) {
-        AppLog.warning("⚠️ Isolate trả về null, bỏ qua frame này");
+      if (checkinState.isSuccessCooldown || recognizedName.value != "Unknown") {
+        isProcessing.value = false;
         return;
       }
 
+      if (aiResult == null) {
+        AppLog.warning("⚠️ Isolate trả về null, bỏ qua frame này");
+        isProcessing.value = false;
+        return;
+      }
+
+      _faceAttempts[currentFaceId] = (_faceAttempts[currentFaceId] ?? 0) + 1;
+      AppLog.info(
+        "👀 Tracking ID $currentFaceId | Attempt: ${_faceAttempts[currentFaceId]} | Blurry Streak: ${checkinState.blurryStreak} | Spoof Streak: ${checkinState.spoofStreak}",
+      );
+
+      // Giới hạn max 10 khung hình (bao gồm cả mờ và nét)
+      if (_faceAttempts[currentFaceId]! > 10) {
+        AppLog.warning(
+          "⏳ Tracking ID $currentFaceId đã cạn 10 lần thử! Đánh rớt.",
+        );
+
+        errorMsg.value = "Không thể nhận diện. Vui lòng thử lại!";
+
+        // Dọn dẹp
+        _faceAttempts.remove(currentFaceId);
+        checkinState.matchStreak = 0;
+        checkinState.spoofStreak = 0;
+
+        // Phạt 2 giây
+        checkinState.isSuccessCooldown = true;
+        Future.delayed(const Duration(seconds: 2), () {
+          checkinState.isSuccessCooldown = false;
+          errorMsg.value = "";
+        });
+
+        return;
+      }
+
+      if (aiResult['status'] == 'blurry') {
+        checkinState.blurryStreak++;
+        final double qScore = aiResult['qualityScore'];
+        AppLog.warning(
+          "⚠️ Khung hình mờ bị loại (Score: ${qScore.toStringAsFixed(3)}), chờ frame tiếp theo...",
+        );
+
+        // Hiện cảnh báo cho người dùng
+        if (checkinState.blurryStreak >= 3) {
+          if (faceInstruction.value != "Ảnh bị mờ, vui lòng giữ yên đầu!") {
+            faceInstruction.value = "Ảnh bị mờ, vui lòng giữ yên đầu!";
+          }
+        }
+
+        _lastBlurWarningTime = DateTime.now();
+        return;
+      }
+
+      checkinState.blurryStreak = 0;
+      if (faceInstruction.value == "Ảnh bị mờ, vui lòng giữ yên đầu!") {
+        // Chỉ xóa cảnh báo mờ nếu đã trôi qua ít nhất 800 milliseconds
+        if (DateTime.now().difference(_lastBlurWarningTime).inMilliseconds >
+            800) {
+          faceInstruction.value = "";
+        }
+      } else if (faceInstruction.value.isNotEmpty) {
+        // Các cảnh báo khác (nếu có) thì cứ xóa bình thường
+        faceInstruction.value = "";
+      }
       final String aiName = aiResult['name'] as String;
-      // final double aiDistance = aiResult['distance'] as double;
+      final double aiDistance = aiResult['distance'] as double;
       final bool aiIsUnknown = aiResult['isUnknown'] as bool;
       final double spoofScore = aiResult['spoofScore'] as double;
-
-      int tTotal = sw.elapsedMilliseconds;
-      AppLog.info(
-        "⏱️ Tổng [${tTotal}ms] ➔ "
-        "ML Kit Detect: ${tDetect}ms | "
-        "C++ (Crop+AI): ${tNative}ms | "
-        "FPS: ${(1000 / tTotal).toStringAsFixed(1)}",
-      );
+      final double qScore = aiResult['qualityScore'];
 
       String detectedName = aiIsUnknown ? "Unknown" : aiName;
       bool isRealPerson = spoofScore > _spoofService.threshold;
 
       AppLog.info(
-        "🔍 KẾT QUẢ AI -> Tên: $detectedName, Real Score: ${(spoofScore * 100).toStringAsFixed(1)}%",
+        "🔍 KẾT QUẢ AI -> Tên: $detectedName, Real Score: ${(spoofScore * 100).toStringAsFixed(1)}%>60%, Quality Score: ${(qScore * 100).toStringAsFixed(1)}%>40%",
       );
 
       if (detectedName != "Unknown" && isRealPerson) {
@@ -442,8 +544,41 @@ class FaceAttendanceController extends GetxController {
         if (checkinState.matchStreak >=
             FaceCheckinState.requiredRecognitionStreak) {
           recognizedName.value = checkinState.currentCandidate!;
+          verifiedFaces[currentFaceId] = recognizedName.value;
 
-          unawaited(_handleCheckinSuccess(checkinState.currentCandidate!));
+          _faceAttempts.remove(currentFaceId);
+
+          // 1. GỌI HÀM NÉN ẢNH LUÔN (Truyền đúng cái nativeBuffer đang dùng)
+          final jpegBytes = FaceImagePipelineNative.encodeYuvToJpeg(
+            ptrYuv: nativeBuffer!,
+            width: image.width,
+            height: image.height,
+            rotation: cameraController?.description.sensorOrientation ?? 0,
+          );
+
+          String? localImagePath;
+
+          // 2. LƯU THÀNH FILE JPG XUỐNG ĐIỆN THOẠI
+          if (jpegBytes != null) {
+            // Lấy thư mục ẩn của App (Người dùng không tự xóa được)
+            final directory = await getApplicationDocumentsDirectory();
+            final fileName =
+                'evidence_${DateTime.now().millisecondsSinceEpoch}.jpg';
+            final file = File('${directory.path}/$fileName');
+
+            await file.writeAsBytes(jpegBytes);
+            localImagePath = file.path;
+            // AppLog.info("📸 Đã lưu ảnh bằng chứng: $localImagePath");
+          }
+
+          unawaited(
+            _handleCheckinSuccess(
+              studentId: checkinState.currentCandidate!,
+              confidence: aiDistance,
+              livenessScore: spoofScore,
+              localImagePath: localImagePath,
+            ),
+          );
 
           checkinState.isSuccessCooldown =
               true; // Bật cooldown ngay khi check-in thành công
@@ -495,8 +630,8 @@ class FaceAttendanceController extends GetxController {
       AppLog.error("❌ Lỗi processFrame: $e");
       AppLog.error("Dấu vết (StackTrace):\n$s");
     } finally {
-      // Tổng kết thời gian 1 frame
-      sw.stop();
+      // // Tổng kết thời gian 1 frame
+      // sw.stop();
 
       await Future.delayed(const Duration(milliseconds: 400));
 
@@ -510,8 +645,9 @@ class FaceAttendanceController extends GetxController {
     isProcessing.value = true;
 
     _audioPlayer.dispose();
-
     _faceDetector.close();
+    verifiedFaces.clear();
+    _faceAttempts.clear();
 
     // Dọn dẹp RAM
     if (nativeBuffer != null) {

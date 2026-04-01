@@ -33,17 +33,23 @@ dependencies:
 
   get: ^4.7.3
   camera: ^0.11.3
-  # image: ^4.5.4 
-  # dio: ^5.9.0 #
+  image: ^4.5.4 #
   ffi: ^2.1.0 
-  # path_provider: ^2.1.5 # 
   permission_handler: ^12.0.1 
   google_mlkit_face_detection: ^0.13.1
-  # tflite_flutter: ^0.11.0
+  tflite_flutter: ^0.11.0 #
   hive_flutter: ^1.1.0 
   audioplayers: ^6.6.0 
-  # archive: ^4.0.7 #
-  # flutter_image_compress: ^2.3.0 #
+  dio: ^5.9.2
+  flutter_secure_storage: ^10.0.0
+  web_socket_channel: ^3.0.3
+  uuid: ^4.5.3
+  path_provider: ^2.1.5
+  connectivity_plus: ^7.0.0
+  device_info_plus: ^12.3.0
+  http_parser: ^4.1.2
+  archive: ^4.0.7 #
+  flutter_image_compress: ^2.3.0 #
 
 dev_dependencies:
   flutter_test:
@@ -70,6 +76,7 @@ flutter:
   assets:
     - assets/models/mobilefacenet.tflite
     - assets/models/fasnet_float32.tflite
+    - assets/models/lightqnet_mobile.tflite
     # - assets/models/litmas_model_float32.tflite
     # - assets/models/deeppix_slim_float32.tflite
     # - assets/models/litmas_model_float32_new.tflite
@@ -79,8 +86,8 @@ flutter:
     # - assets/models/MobileFaceNet_testing_2.tflite
     # - assets/models/w600k_mbf_float32.tflite
     # - assets/models/output_model_test.tflite
-    # - assets/dataset.zip
-    - assets/db_mobilefacenet_tflite.json
+    - assets/dataset_test.zip
+    # - assets/db_mobilefacenet_tflite.json
     # - assets/sounds/universfield-new-notification-07-210334.mp3
     - assets/sounds/miraclei-sample_confirm_accept01_kofi_by_miraclei-364181.mp3
     # - assets/db_MobileFaceNet_testing_2_tflite.json

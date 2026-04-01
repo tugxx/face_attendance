@@ -14,6 +14,7 @@ add_library(
         utils/native_face_align.cpp     # File cắt ảnh
         core/face_recognizer.cpp        # Nhận diện
         core/anti_spoofing.cpp          # Chống giả mạo
+        core/face_quality.cpp
 )        
 
 # 2. Báo cho CMake biết ta có thư viện TFLite JNI

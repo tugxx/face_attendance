@@ -7,7 +7,7 @@ import 'dart:ffi';
 import 'package:get/get.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 
-import '../../app/types/face_progress.dart';
+import '../types/face_pipeline.dart';
 import '../services/log_service.dart';
 import '../../data/models/registration_result.dart';
 
@@ -27,8 +27,6 @@ class FaceIsolateService extends GetxService {
 
   // Khởi tạo Isolate
   Future<void> start() async {
-    // final sw = Stopwatch()..start(); // ⏱️ Bắt đầu đo
-
     if (_isReady) return;
 
     // 1. Tạo một cái Barie
@@ -45,8 +43,6 @@ class FaceIsolateService extends GetxService {
         _sendPort = message;
         _isReady = true;
 
-        // sw.stop(); // ⏱️ Dừng đo
-        // AppLog.info("⏱️ Thời gian Spawn Isolate: ${sw.elapsedMilliseconds}ms");
         AppLog.info("✅ FaceIsolateService: Worker Started!");
 
         // 2. MỞ BARIE: Lúc này hàm start() mới thực sự được xem là hoàn thành
@@ -147,43 +143,39 @@ class FaceIsolateService extends GetxService {
     return result as RegistrationResult?;
   }
 
-  // Future<List<double>?> _sendRequest(
-  //   Uint8List yuvBytes,
-  //   int width,
-  //   int height,
-  //   Face face,
-  //   int rotation,
-  //   int type, [
-  //   int targetSize = 112,
-  // ]) async {
-  //   if (!_isReady) return null;
+  // --- THÊM HÀM GỌI TỪ LUỒNG CHÍNH ---
+  Future<double> processQualityInIsolate({
+    required int address,
+    required int width,
+    required int height,
+    required Face face,
+    required int rotation,
+  }) async {
+    if (!_isReady) return -1.0;
 
-  //   final completer = Completer<List<double>?>();
-  //   int reqId = _nextRequestId++;
-  //   _pendingRequests[reqId] = completer;
+    final completer = Completer<dynamic>();
+    int reqId = _nextRequestId++;
+    _pendingRequests[reqId] = completer;
 
-  //   final landmarksData = _extractLandmarks(face);
-  //   if (landmarksData == null) {
-  //     _pendingRequests.remove(reqId);
-  //     return null;
-  //   }
+    // Lấy bounding box
+    final rect = face.boundingBox;
 
-  //   final transferableYuv = TransferableTypedData.fromList([yuvBytes]);
+    _sendPort.send([
+      reqId,
+      address, width, height, 0,
+      <double>[], // landmarks (không cần)
+      rect.left.toInt(),
+      rect.top.toInt(),
+      rect.width.toInt(),
+      rect.height.toInt(),
+      rotation,
+      2, // 👈 type = 2: TÁC VỤ QUALITY CHECK
+      0, 0.0,
+    ]);
 
-  //   _sendPort.send([
-  //     reqId,
-  //     transferableYuv,
-  //     width,
-  //     height,
-  //     landmarksData,
-  //     rotation,
-  //     type, // Thêm type vào cuối
-  //     targetSize,
-  //   ]);
-
-  //   final result = await completer.future;
-  //   return result;
-  // }
+    final result = await completer.future;
+    return (result as num?)?.toDouble() ?? -1.0;
+  }
 
   // Hủy Isolate khi thoát app
   void reset() {
@@ -215,7 +207,7 @@ class FaceIsolateService extends GetxService {
     mainSendPort.send(port.sendPort); // Gửi cổng của mình cho Main
 
     // Load thư viện C++ 1 LẦN DUY NHẤT TẠI ĐÂY
-    FaceProcessorNative.init();
+    FaceImagePipelineNative.init();
 
     port.listen((message) {
       if (message is! List) return;
@@ -241,7 +233,7 @@ class FaceIsolateService extends GetxService {
           final int spoofTargetSize = message[12];
           final double threshold = message[13];
 
-          final result = FaceProcessorNative.processDualTask(
+          final result = FaceImagePipelineNative.processDualTask(
             ptrYuv: ptrYuv,
             width: width,
             height: height,
@@ -264,7 +256,7 @@ class FaceIsolateService extends GetxService {
           // TYPE 1: ĐĂNG KÝ KHOÉT ẢNH VÀ TẠO JPG
           // ----------------------------------------------------
           final RegistrationResult? result =
-              FaceProcessorNative.processRegistration(
+              FaceImagePipelineNative.processRegistration(
                 ptrYuv: ptrYuv, // Đã có sẵn từ address
                 width: width, // Đã nhận từ message
                 height: height, // Đã nhận từ message
@@ -277,29 +269,22 @@ class FaceIsolateService extends GetxService {
             return;
           }
 
-          // // Vẽ ảnh JPG trực tiếp bên trong Isolate này luôn (Không làm đơ UI)
-          // final image = img.Image(width: 112, height: 112);
-          // for (int y = 0; y < 112; y++) {
-          //   for (int x = 0; x < 112; x++) {
-          //     int index = (y * 112 + x) * 3;
-          //     double r = (aiPixels[index] * 128.0) + 127.5;
-          //     double g = (aiPixels[index + 1] * 128.0) + 127.5;
-          //     double b = (aiPixels[index + 2] * 128.0) + 127.5;
-          //     image.setPixelRgb(x, y, r.toInt(), g.toInt(), b.toInt());
-          //   }
-          // }
-
-          // Uint8List displayBytes = Uint8List.fromList(
-          //   img.encodeJpg(image, quality: 100),
-          // );
-
-          // // Trả về thẳng object RegistrationResult
-          // mainSendPort.send([
-          //   reqId,
-          //   RegistrationResult(aiPixels, displayBytes),
-          // ]);
-
           mainSendPort.send([reqId, result]);
+        } else if (taskType == 2) {
+          // ----------------------------------------------------
+          // TYPE 2: CHECK QUALITY (LIGHTQNET)
+          // ----------------------------------------------------
+          final double score = FaceImagePipelineNative.processQuality(
+            ptrYuv: ptrYuv,
+            width: message[2],
+            height: message[3],
+            rotation: message[10],
+            rectX: message[6],
+            rectY: message[7],
+            rectW: message[8],
+            rectH: message[9],
+          );
+          mainSendPort.send([reqId, score]);
         }
       } catch (e) {
         AppLog.error("Worker Error: $e");
@@ -345,27 +330,3 @@ class FaceIsolateService extends GetxService {
     return list;
   }
 }
-
-// typedef GetTFLiteVersionC = Pointer<Utf8> Function();
-// typedef GetTFLiteVersionDart = Pointer<Utf8> Function();
-
-// void testCPlusPlusLink() {
-//   try {
-//     // Mở thư viện (bạn chắc đã có đoạn này rồi)
-//     final dylib = DynamicLibrary.open('libnative_face_align.so');
-
-//     // Tìm hàm GetTFLiteVersion
-//     final getVersion = dylib
-//         .lookupFunction<GetTFLiteVersionC, GetTFLiteVersionDart>(
-//           'GetTFLiteVersion',
-//         );
-
-//     // Thực thi và in ra console
-//     final versionPointer = getVersion();
-//     AppLog.info(
-//       "🟢 [DART LOG]: TFLite Version từ C++ là: ${versionPointer.toDartString()}",
-//     );
-//   } catch (e) {
-//     AppLog.error("🔴 [LỖI DART]: Không gọi được C++, lỗi: $e");
-//   }
-// }

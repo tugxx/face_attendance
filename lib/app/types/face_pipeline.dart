@@ -118,6 +118,7 @@ typedef ProcessFrameNativeC =
       Pointer<Utf8> outName,
       Pointer<Float> outDistance,
       Pointer<Float> outSpoofScore,
+      Pointer<Float> outQualityScore,
     );
 
 typedef ProcessFrameNativeDart =
@@ -137,6 +138,7 @@ typedef ProcessFrameNativeDart =
       Pointer<Utf8> outName,
       Pointer<Float> outDistance,
       Pointer<Float> outSpoofScore,
+      Pointer<Float> outQualityScore,
     );
 
 typedef ProcessRegistrationC =
@@ -163,11 +165,54 @@ typedef ProcessRegistrationDart =
       Pointer<Int32> outJpgSize,
     );
 
+typedef EncodeJpegC =
+    Int32 Function(
+      Pointer<Uint8> yuvData,
+      Int32 width,
+      Int32 height,
+      Int32 rotation,
+      Pointer<Pointer<Uint8>> outJpegData,
+      Pointer<Int32> outJpegSize,
+    );
+
+typedef EncodeJpegDart =
+    int Function(
+      Pointer<Uint8> yuvData,
+      int width,
+      int height,
+      int rotation,
+      Pointer<Pointer<Uint8>> outJpegData,
+      Pointer<Int32> outJpegSize,
+    );
+
+typedef ProcessQualityC =
+    Float Function(
+      Pointer<Uint8> yuvData,
+      Int32 width,
+      Int32 height,
+      Int32 rotation,
+      Int32 rectX,
+      Int32 rectY,
+      Int32 rectW,
+      Int32 rectH,
+    );
+typedef ProcessQualityDart =
+    double Function(
+      Pointer<Uint8> yuvData,
+      int width,
+      int height,
+      int rotation,
+      int rectX,
+      int rectY,
+      int rectW,
+      int rectH,
+    );
+
 // ==========================================================
 // 2. CLASS GIAO TIẾP VỚI NATIVE
 // ==========================================================
 
-class FaceProcessorNative {
+class FaceImagePipelineNative {
   static DynamicLibrary? _lib;
 
   // static ProcessFaceAffineDart? _funcCamera;
@@ -178,9 +223,12 @@ class FaceProcessorNative {
 
   static ProcessRegistrationDart? _funcProcessRegistration;
 
+  static EncodeJpegDart? _funcEncodeJpeg;
+
+  static ProcessQualityDart? _funcProcessQuality;
+
   static void init() {
     if (_lib != null) return;
-    // final sw = Stopwatch()..start(); // ⏱️ Bắt đầu đo
 
     // Tên thư viện phải khớp với CMakeLists (native_face)
     final libName = Platform.isAndroid
@@ -238,13 +286,23 @@ class FaceProcessorNative {
         AppLog.error("⚠️ Missing ProcessRegistrationNative: $e");
       }
 
+      try {
+        _funcEncodeJpeg = _lib!.lookupFunction<EncodeJpegC, EncodeJpegDart>(
+          'EncodeFullFrameToJpeg',
+        );
+      } catch (_) {
+        AppLog.error("⚠️ Không tìm thấy hàm EncodeFullFrameToJpeg trong C++");
+      }
+
+      _funcProcessQuality = _lib!
+          .lookupFunction<ProcessQualityC, ProcessQualityDart>(
+            'ProcessQualityNative',
+          );
+
       // AppLog.info("✅ Đã load thư viện C++ thành công: $libName");
     } catch (e) {
       AppLog.error("❌ Lỗi load thư viện C++: $e");
     }
-
-    // sw.stop(); // ⏱️ Dừng đo
-    // AppLog.info("⏱️ Thời gian Load C++ thực tế: ${sw.elapsedMilliseconds}ms");
   }
 
   // --------------------------------------------------------
@@ -460,6 +518,7 @@ class FaceProcessorNative {
     final outNamePtr = calloc<Uint8>(256).cast<Utf8>();
     final outDistPtr = calloc<Float>(1);
     final outSpoofPtr = calloc<Float>(1);
+    final outQualityPtr = calloc<Float>(1);
 
     try {
       final status = _funcProcessFrame!(
@@ -478,25 +537,106 @@ class FaceProcessorNative {
         outNamePtr,
         outDistPtr,
         outSpoofPtr,
+        outQualityPtr,
       );
 
       if (status == 0) return null;
+
+      final double qScore = outQualityPtr.value;
+      if (status == 3) {
+        return {'status': 'blurry', 'qualityScore': qScore};
+      }
 
       final name = outNamePtr.toDartString();
       final isUnknown = (status == 2);
 
       // Trả về thông tin ngắn gọn
       return {
+        'status': 'success',
         'name': name,
         'distance': outDistPtr.value,
         'isUnknown': isUnknown,
         'spoofScore': outSpoofPtr.value,
+        'qualityScore': qScore,
       };
     } finally {
       calloc.free(ptrLandmarks);
       calloc.free(outNamePtr);
       calloc.free(outDistPtr);
       calloc.free(outSpoofPtr);
+      calloc.free(outQualityPtr);
+    }
+  }
+
+  static Uint8List? encodeYuvToJpeg({
+    required Pointer<Uint8> ptrYuv,
+    required int width,
+    required int height,
+    required int rotation,
+  }) {
+    if (_funcProcessFrame == null) init(); // Hoặc biến check init của bạn
+
+    // Cấp phát 2 con trỏ rỗng để hứng dữ liệu từ C++ trả về
+    final outJpegDataPtr = calloc<Pointer<Uint8>>();
+    final outJpegSizePtr = calloc<Int32>();
+
+    try {
+      // 1. Gọi hàm C++ (Lúc này C++ sẽ nén ảnh và nhét data vào 2 con trỏ trên)
+      final status = _funcEncodeJpeg!(
+        ptrYuv,
+        width,
+        height,
+        rotation,
+        outJpegDataPtr,
+        outJpegSizePtr,
+      );
+
+      if (status != 1 || outJpegSizePtr.value <= 0) return null;
+
+      // 2. Lấy kích thước và địa chỉ bộ nhớ chứa ảnh JPEG
+      final size = outJpegSizePtr.value;
+      final jpegPointer = outJpegDataPtr.value;
+
+      // 3. Clone mảng byte từ C++ sang thế giới của Dart
+      // Dùng Uint8List.fromList để copy đứt đoạn ra, an toàn 100%
+      final dartJpegBytes = Uint8List.fromList(jpegPointer.asTypedList(size));
+
+      // 4. ⚠️ ĐẶC BIỆT QUAN TRỌNG: Giải phóng RAM mà C++ đã malloc
+      calloc.free(jpegPointer);
+
+      return dartJpegBytes;
+    } finally {
+      // Giải phóng 2 cái rổ lúc nãy mang đi hứng
+      calloc.free(outJpegDataPtr);
+      calloc.free(outJpegSizePtr);
+    }
+  }
+
+  static double processQuality({
+    required Pointer<Uint8> ptrYuv,
+    required int width,
+    required int height,
+    required int rotation,
+    required int rectX,
+    required int rectY,
+    required int rectW,
+    required int rectH,
+  }) {
+    if (_funcProcessQuality == null) init();
+    try {
+      return _funcProcessQuality!(
+        ptrYuv,
+        width,
+        height,
+        rotation,
+        rectX,
+        rectY,
+        rectW,
+        rectH,
+      );
+    } catch (e) {
+      AppLog.error("Lỗi Native Quality: $e");
+      return -1.0;
     }
   }
 }

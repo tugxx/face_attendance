@@ -68,6 +68,20 @@ typedef PredictFaceDart =
 typedef PredictSpoofC = Float Function(Pointer<Float> input, Int32 inputSize);
 typedef PredictSpoofDart = double Function(Pointer<Float> input, int inputSize);
 
+typedef RemoveFaceC = Void Function(Pointer<Utf8> name);
+typedef RemoveFaceDart = void Function(Pointer<Utf8> name);
+
+// --- FACE QUALITY ---
+typedef InitQualityModelC =
+    Int32 Function(Pointer<Void> modelData, Int32 modelSize);
+typedef InitQualityModelDart =
+    int Function(Pointer<Void> modelData, int modelSize);
+
+typedef PredictQualityC =
+    Float Function(Pointer<Float> inputPixels, Int32 pixelsCount);
+typedef PredictQualityDart =
+    double Function(Pointer<Float> inputPixels, int pixelsCount);
+
 class NativeAiService {
   static final NativeAiService _instance = NativeAiService._internal();
   factory NativeAiService() => _instance;
@@ -82,10 +96,16 @@ class NativeAiService {
   late PredictFaceDart _predictFaceNative;
   late InitSpoofModelDart _initSpoofModelNative;
   late PredictSpoofDart _predictSpoofNative;
+  late RemoveFaceDart _removeFaceNative;
+  late InitQualityModelDart _initQualityModelNative;
+  late PredictQualityDart _predictQualityNative;
 
   // Biến giữ vùng nhớ C++ không bị Dart gom rác (BẮT BUỘC PHẢI GIỮ)
   Pointer<Uint8>? _faceBuffer;
   Pointer<Uint8>? _spoofBuffer; // Buffer giữ model Spoofing trên RAM
+
+  // 2. Thêm Buffer giữ model Quality trên RAM
+  Pointer<Uint8>? _qualityBuffer;
 
   // Hàm phụ trợ đọc asset
   Future<Uint8List> _loadAssetBytes(String path) async {
@@ -115,6 +135,17 @@ class NativeAiService {
         .lookupFunction<InitSpoofModelC, InitSpoofModelDart>('InitSpoofModel');
     _predictSpoofNative = _dylib
         .lookupFunction<PredictSpoofC, PredictSpoofDart>('PredictSpoofNative');
+    _removeFaceNative = _dylib.lookupFunction<RemoveFaceC, RemoveFaceDart>(
+      'RemoveFace',
+    );
+    _initQualityModelNative = _dylib
+        .lookupFunction<InitQualityModelC, InitQualityModelDart>(
+          'InitQualityModelNative',
+        );
+    _predictQualityNative = _dylib
+        .lookupFunction<PredictQualityC, PredictQualityDart>(
+          'PredictQualityNative',
+        );
   }
 
   /// Khởi tạo Face Model từ thư mục Assets
@@ -138,14 +169,14 @@ class NativeAiService {
       );
 
       if (result == 1) {
-        // AppLog.info("🎉 C++ Đã nạp xong Face Model!");
+        AppLog.info("🎉 C++ Đã nạp xong Face Model!");
         return true;
       } else {
-        // AppLog.error("❌ C++ nạp Face Model thất bại!");
+        AppLog.error("❌ C++ nạp Face Model thất bại!");
         return false;
       }
     } catch (e) {
-      // AppLog.error("❌ Lỗi FFI Init Face Model: $e");
+      AppLog.error("❌ Lỗi FFI Init Face Model: $e");
       return false;
     }
   }
@@ -168,7 +199,7 @@ class NativeAiService {
       );
 
       if (result == 1) {
-        AppLog.info("🛡️ C++ Đã nạp xong Anti-Spoof Model!");
+        // AppLog.info("🛡️ C++ Đã nạp xong Anti-Spoof Model!");
         return true;
       } else {
         AppLog.error("❌ C++ nạp Anti-Spoof Model thất bại!");
@@ -278,9 +309,56 @@ class NativeAiService {
     return score;
   }
 
+  // ===========================================================================
+  // FACE QUALITY FUNCTIONS
+  // ===========================================================================
+
+  /// Đọc file .tflite và ném con trỏ byte xuống C++
+  Future<bool> initQualityModel(String modelPath) async {
+    try {
+      final bytes = await _loadAssetBytes(modelPath);
+
+      // Cấp phát vùng nhớ không bị Dart quản lý
+      _qualityBuffer = calloc<Uint8>(bytes.length);
+      _qualityBuffer!.asTypedList(bytes.length).setAll(0, bytes);
+
+      // Truyền con trỏ xuống C++
+      final result = _initQualityModelNative(
+        _qualityBuffer!.cast<Void>(),
+        bytes.length,
+      );
+
+      return result == 1; // 1 là thành công, 0 là thất bại
+    } catch (e) {
+      // AppLog.error("❌ Lỗi nạp Quality Model: $e");
+      return false;
+    }
+  }
+
+  /// Ném mảng pixel ảnh xuống C++ để tính toán
+  double predictQuality(List<double> inputPixels) {
+    // Ép mảng List<double> xuống Float Pointer C++
+    final inputPtr = calloc<Float>(inputPixels.length);
+    inputPtr.asTypedList(inputPixels.length).setAll(0, inputPixels);
+
+    // Bắn qua C++
+    final score = _predictQualityNative(inputPtr, inputPixels.length);
+
+    // Bắt buộc dọn rác cho mảng ảnh (vì gọi liên tục)
+    calloc.free(inputPtr);
+
+    return score;
+  }
+
   /// Dọn sạch RAM C++ (Khi user đăng xuất hoặc xóa Database)
   void clearNativeDatabase() {
     _clearDatabaseNative();
+  }
+
+  void removeFaceFromNative(String name) {
+    final nativeName = name.toNativeUtf8();
+    _removeFaceNative(nativeName);
+    calloc.free(nativeName); // Nhớ dọn rác
   }
 
   // Nhớ giải phóng bộ nhớ khi tắt app
