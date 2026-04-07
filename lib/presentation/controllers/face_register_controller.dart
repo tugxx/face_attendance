@@ -170,12 +170,16 @@ class FaceRegisterController extends GetxController {
     final double? yaw = face.headEulerAngleY; // Trái/Phải
     if (yaw == null) return false;
 
+    String tempInstruction = faceInstruction.value;
+    Color tempColor = frameColor.value;
+    bool isAngleValid = false;
+
     // 3. Logic hướng dẫn theo từng bước
     if (registrationStep.value == 0) {
       if (yaw > -10 && yaw < 10) {
-        faceInstruction.value = "Giữ yên để chụp ảnh chính diện";
-        frameColor.value = Colors.greenAccent;
-        return true; // Mặt đang nhìn thẳng chuẩn
+        tempInstruction = "Giữ yên để chụp ảnh chính diện";
+        tempColor = Colors.greenAccent;
+        isAngleValid = true; // Mặt đang nhìn thẳng chuẩn
       } else {
         faceInstruction.value = "Vui lòng nhìn thẳng vào màn hình";
         frameColor.value = Colors.redAccent;
@@ -184,9 +188,9 @@ class FaceRegisterController extends GetxController {
     } else if (registrationStep.value == 1) {
       if (yaw > 15) {
         // Âm là quay sang trái
-        faceInstruction.value = "Giữ yên góc trái";
-        frameColor.value = Colors.greenAccent;
-        return true;
+        tempInstruction = "Giữ yên góc trái";
+        tempColor = Colors.greenAccent;
+        isAngleValid = true;
       } else {
         faceInstruction.value = "Từ từ quay mặt sang trái";
         frameColor.value = Colors.redAccent;
@@ -195,15 +199,17 @@ class FaceRegisterController extends GetxController {
     } else if (registrationStep.value == 2) {
       if (yaw < -15) {
         // Dương là quay sang phải
-        faceInstruction.value = "Giữ yên góc phải";
-        frameColor.value = Colors.greenAccent;
-        return true;
+        tempInstruction = "Giữ yên góc phải";
+        tempColor = Colors.greenAccent;
+        isAngleValid = true;
       } else {
         faceInstruction.value = "Từ từ quay mặt sang phải";
         frameColor.value = Colors.redAccent;
         return false;
       }
     }
+
+    if (!isAngleValid) return false;
 
     _frameCount++;
 
@@ -244,7 +250,10 @@ class FaceRegisterController extends GetxController {
       }
     }
 
-    var qualityThreshold = 0.60;
+    var qualityThreshold = 0.45;
+    AppLog.info(
+      "Quality score: ${_lastQualityScore.toStringAsFixed(2)} (Threshold: $qualityThreshold)",
+    );
 
     if (_lastQualityScore < qualityThreshold) {
       faceInstruction.value = "Ảnh bị mờ, hãy giữ yên hoặc lau ống kính!";
@@ -253,7 +262,14 @@ class FaceRegisterController extends GetxController {
       return false;
     }
 
-    return false;
+    if (faceInstruction.value != tempInstruction) {
+      faceInstruction.value = tempInstruction;
+    }
+    if (frameColor.value != tempColor) {
+      frameColor.value = tempColor;
+    }
+
+    return true;
   }
 
   // Logic kiểm tra trùng lặp trước khi cho nhập tên
@@ -278,7 +294,7 @@ class FaceRegisterController extends GetxController {
         HapticFeedback.vibrate();
 
         tempRecognizedName.value = result.name;
-        tempConfidence.value = result.distance;
+        tempConfidence.value = result.score;
         showDuplicateDialog.value = true;
       } else {
         // NGƯỜI MỚI -> Báo View mở Dialog Nhập tên
@@ -449,7 +465,6 @@ class FaceRegisterController extends GetxController {
               _stableFrameCount;
           scanProgress.value = currentFramesDone / totalFramesNeeded;
 
-          // // Debug: In ra để biết đang đếm
           // AppLog.info("Stable count: $_stableFrameCount");
 
           // Nếu mặt ổn định đủ lâu -> CHỤP LUÔN
@@ -477,12 +492,7 @@ class FaceRegisterController extends GetxController {
   }
 
   Future<void> autoCapture(CameraImage image, Face face) async {
-    // isRegistering.value = true;
     _stableFrameCount = 0;
-
-    // AppLog.info(
-    //   "📸 CHỤP THÀNH CÔNG GÓC SỐ: ${registrationStep.value} | Góc xoay Y (trái/phải): ${face.headEulerAngleY}",
-    // );
 
     // await cameraController?.stopImageStream();
 
@@ -506,7 +516,10 @@ class FaceRegisterController extends GetxController {
 
       int offset = 0;
       for (var plane in image.planes) {
-        nativeBuffer!.asTypedList(totalBytes).setAll(offset, plane.bytes);
+        // nativeBuffer!.asTypedList(totalBytes).setAll(offset, plane.bytes);
+        (nativeBuffer! + offset)
+            .asTypedList(plane.bytes.length)
+            .setAll(0, plane.bytes);
         offset += plane.bytes.length;
       }
 
@@ -518,6 +531,7 @@ class FaceRegisterController extends GetxController {
             height: image.height,
             face: face,
             rotation: _currentCamera!.sensorOrientation,
+            recogPixelSize: _aiService.recogPixelSize,
           );
 
       if (result != null) {
@@ -540,9 +554,6 @@ class FaceRegisterController extends GetxController {
           // ✅ ĐÃ ĐỦ 3 GÓC -> BẮT ĐẦU ĐÓNG BĂNG MÀN HÌNH VÀ XỬ LÝ
           isRegistering.value = true; // Hiện vòng xoay loading đen mờ
           await cameraController?.stopImageStream(); // Tắt ống kính
-
-          // // Trộn 3 vector thành 1 Siêu Vector
-          // List<double> finalVector = _averageVectors(capturedVectors);
 
           // Hiện Dialog và kết thúc
           await _checkDuplicateAndShowDialog(capturedVectors, frontFaceImage!);

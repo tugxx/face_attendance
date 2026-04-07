@@ -112,13 +112,17 @@ typedef ProcessFrameNativeC =
       Int32 rectY,
       Int32 rectW,
       Int32 rectH,
-      Int32 spoofW,
-      Int32 spoofH,
-      Float threshold,
+      Float recognitionThreshold,
+      Float spoofThreshold,
+      Float qualityThreshold,
       Pointer<Utf8> outName,
-      Pointer<Float> outDistance,
+      Pointer<Utf8> outTemplateId,
+      Pointer<Utf8> outImposterName,
+      Pointer<Float> outScore,
+      Pointer<Float> outImposterScore,
       Pointer<Float> outSpoofScore,
       Pointer<Float> outQualityScore,
+      Pointer<Bool> outIsRealPtr,
     );
 
 typedef ProcessFrameNativeDart =
@@ -132,13 +136,17 @@ typedef ProcessFrameNativeDart =
       int rectY,
       int rectW,
       int rectH,
-      int spoofW,
-      int spoofH,
-      double threshold,
+      double recognitionThreshold,
+      double spoofThreshold,
+      double qualityThreshold,
       Pointer<Utf8> outName,
-      Pointer<Float> outDistance,
+      Pointer<Utf8> outTemplateId,
+      Pointer<Utf8> outImposterName,
+      Pointer<Float> outScore,
+      Pointer<Float> outImposterScore,
       Pointer<Float> outSpoofScore,
       Pointer<Float> outQualityScore,
+      Pointer<Bool> outIsRealPtr,
     );
 
 typedef ProcessRegistrationC =
@@ -185,6 +193,10 @@ typedef EncodeJpegDart =
       Pointer<Int32> outJpegSize,
     );
 
+typedef FreeMemoryC = Void Function(Pointer<Void> ptr);
+
+typedef FreeMemoryDart = void Function(Pointer<Void> ptr);
+
 typedef ProcessQualityC =
     Float Function(
       Pointer<Uint8> yuvData,
@@ -225,6 +237,8 @@ class FaceImagePipelineNative {
 
   static EncodeJpegDart? _funcEncodeJpeg;
 
+  static FreeMemoryDart? _funcFreeMemoryNative;
+
   static ProcessQualityDart? _funcProcessQuality;
 
   static void init() {
@@ -237,19 +251,6 @@ class FaceImagePipelineNative {
 
     try {
       _lib = DynamicLibrary.open(libName);
-
-      // // Load hàm Camera
-      // try {
-      //   _funcCamera = _lib!
-      //       .lookup<NativeFunction<ProcessFaceAffineFunc>>(
-      //         'process_face_affine',
-      //       )
-      //       .asFunction();
-      // } catch (_) {
-      //   AppLog.error("⚠️ Missing process_face_affine");
-      // }
-
-      // Load hàm File (Mới)
       try {
         _funcFile = _lib!
             .lookup<NativeFunction<ProcessFileRawFunc>>(
@@ -259,14 +260,6 @@ class FaceImagePipelineNative {
       } catch (_) {
         AppLog.error("⚠️ Missing process_file_affine_raw");
       }
-
-      // try {
-      //   _funcSpoof = _lib!
-      //       .lookup<NativeFunction<ProcessFaceNative>>('process_face_crop')
-      //       .asFunction();
-      // } catch (_) {
-      //   AppLog.error("⚠️ Missing spoofing");
-      // }
 
       try {
         _funcProcessFrame = _lib!
@@ -288,10 +281,17 @@ class FaceImagePipelineNative {
 
       try {
         _funcEncodeJpeg = _lib!.lookupFunction<EncodeJpegC, EncodeJpegDart>(
-          'EncodeFullFrameToJpeg',
+          'EncodeFullFrameToJpegNative',
         );
       } catch (_) {
         AppLog.error("⚠️ Không tìm thấy hàm EncodeFullFrameToJpeg trong C++");
+      }
+
+      try {
+        _funcFreeMemoryNative = _lib!
+            .lookupFunction<FreeMemoryC, FreeMemoryDart>('FreeMemoryNative');
+      } catch (e) {
+        AppLog.error("⚠️ Không tìm thấy FreeMemoryNative: $e");
       }
 
       _funcProcessQuality = _lib!
@@ -352,6 +352,7 @@ class FaceImagePipelineNative {
     required int height,
     required List<double> landmarks, // Nhận mảng số thực giống hệt Dual Task
     required int rotation,
+    required int recogPixelSize,
   }) {
     if (_funcProcessRegistration == null) init();
 
@@ -360,8 +361,8 @@ class FaceImagePipelineNative {
     ptrLandmarks.asTypedList(10).setAll(0, landmarks);
 
     // Cấp 3 thùng chứa
-    final outAiPixels = calloc<Float>(112 * 112 * 3);
-    final outJpgBuffer = calloc<Uint8>(50000); // Thùng chứa JPG max 50KB
+    final outAiPixels = calloc<Float>(recogPixelSize);
+    final outJpgBuffer = calloc<Uint8>(50000);
     final outJpgSize = calloc<Int32>(1);
 
     try {
@@ -427,73 +428,6 @@ class FaceImagePipelineNative {
     }
   }
 
-  // static Map<String, List<double>?> processDualTask({
-  //   required Pointer<Uint8> ptrYuv,
-  //   required int width,
-  //   required int height,
-  //   required int yStride,
-  //   required List<double> landmarks,
-  //   required int rotation,
-  //   required int rectX,
-  //   required int rectY,
-  //   required int rectW,
-  //   required int rectH,
-  //   required int spoofWidth,
-  //   required int spoofHeight,
-  // }) {
-  //   if (_funcCamera == null || _funcSpoof == null) init();
-
-  //   // // 1. Cấp phát YUV duy nhất 1 lần cho cả 2 task
-  //   // final ptrYuv = calloc<Uint8>(yuvBytes.length);
-  //   // ptrYuv.asTypedList(yuvBytes.length).setAll(0, yuvBytes);
-
-  //   // 2. Cấp phát Landmark
-  //   final ptrLandmarks = calloc<Float>(10);
-  //   ptrLandmarks.asTypedList(10).setAll(0, landmarks);
-
-  //   // 3. Chuẩn bị Buffer đầu ra cho cả 2
-  //   final int recogLen = 112 * 112 * 3;
-  //   final ptrOutRecog = calloc<Float>(recogLen);
-
-  //   final int spoofLen = spoofWidth * spoofHeight * 3;
-  //   final ptrOutSpoof = calloc<Float>(spoofLen);
-
-  //   try {
-  //     // TASK 1: Gọi hàm Affine (Recognition)
-  //     _funcCamera!(ptrYuv, width, height, ptrLandmarks, rotation, ptrOutRecog);
-
-  //     // TASK 2: Gọi Spoof
-  //     _funcSpoof!(
-  //       ptrYuv,
-  //       width,
-  //       height,
-  //       yStride,
-  //       rotation,
-  //       rectX,
-  //       rectY,
-  //       rectW,
-  //       rectH,
-  //       spoofWidth,
-  //       spoofHeight,
-  //       ptrOutSpoof,
-  //     );
-
-  //     // 4. Gom kết quả
-  //     return {
-  //       'recog': Float32List.fromList(ptrOutRecog.asTypedList(recogLen)),
-  //       'spoof': Float32List.fromList(ptrOutSpoof.asTypedList(spoofLen)),
-  //     };
-  //   } catch (e) {
-  //     AppLog.error("Dual Task Error: $e");
-  //     return {'recog': null, 'spoof': null};
-  //   } finally {
-  //     // 5. Giải phóng toàn bộ 1 lượt
-  //     calloc.free(ptrLandmarks);
-  //     calloc.free(ptrOutRecog);
-  //     calloc.free(ptrOutSpoof);
-  //   }
-  // }
-
   static Map<String, dynamic>? processDualTask({
     required Pointer<Uint8> ptrYuv,
     required int width,
@@ -505,9 +439,9 @@ class FaceImagePipelineNative {
     required int rectY,
     required int rectW,
     required int rectH,
-    required int spoofWidth,
-    required int spoofHeight,
-    required double threshold,
+    required double recognitionThreshold,
+    required double spoofThreshold,
+    required double qualityThreshold,
   }) {
     if (_funcProcessFrame == null) init();
 
@@ -516,9 +450,16 @@ class FaceImagePipelineNative {
 
     // Thùng rỗng hứng kết quả
     final outNamePtr = calloc<Uint8>(256).cast<Utf8>();
-    final outDistPtr = calloc<Float>(1);
+    final outTemplateIdPtr = calloc<Uint8>(256).cast<Utf8>();
+    final outImposterNamePtr = calloc<Uint8>(256).cast<Utf8>();
+
+    final outScorePtr = calloc<Float>(1);
+    final outImposterScorePtr = calloc<Float>(1);
+
     final outSpoofPtr = calloc<Float>(1);
     final outQualityPtr = calloc<Float>(1);
+
+    final outIsRealPtr = calloc<Bool>(1);
 
     try {
       final status = _funcProcessFrame!(
@@ -531,13 +472,17 @@ class FaceImagePipelineNative {
         rectY,
         rectW,
         rectH,
-        spoofWidth,
-        spoofHeight,
-        threshold,
+        recognitionThreshold,
+        spoofThreshold,
+        qualityThreshold,
         outNamePtr,
-        outDistPtr,
+        outTemplateIdPtr,
+        outImposterNamePtr,
+        outScorePtr,
+        outImposterScorePtr,
         outSpoofPtr,
         outQualityPtr,
+        outIsRealPtr,
       );
 
       if (status == 0) return null;
@@ -548,23 +493,35 @@ class FaceImagePipelineNative {
       }
 
       final name = outNamePtr.toDartString();
+      final templateId = outTemplateIdPtr.toDartString();
+      final imposterName = outImposterNamePtr.toDartString();
       final isUnknown = (status == 2);
 
       // Trả về thông tin ngắn gọn
       return {
         'status': 'success',
         'name': name,
-        'distance': outDistPtr.value,
+        'matchedTemplateId': templateId.isEmpty ? null : templateId,
+        'score': outScorePtr.value,
+
+        'imposterName': imposterName.isEmpty ? null : imposterName,
+        'imposterScore': outImposterScorePtr.value,
+
         'isUnknown': isUnknown,
         'spoofScore': outSpoofPtr.value,
+        'isRealPerson': outIsRealPtr.value,
         'qualityScore': qScore,
       };
     } finally {
       calloc.free(ptrLandmarks);
       calloc.free(outNamePtr);
-      calloc.free(outDistPtr);
+      calloc.free(outTemplateIdPtr);
+      calloc.free(outImposterNamePtr);
+      calloc.free(outScorePtr);
+      calloc.free(outImposterScorePtr);
       calloc.free(outSpoofPtr);
       calloc.free(outQualityPtr);
+      calloc.free(outIsRealPtr);
     }
   }
 
@@ -574,11 +531,13 @@ class FaceImagePipelineNative {
     required int height,
     required int rotation,
   }) {
-    if (_funcProcessFrame == null) init(); // Hoặc biến check init của bạn
+    if (_funcEncodeJpeg == null) init(); // Hoặc biến check init của bạn
 
     // Cấp phát 2 con trỏ rỗng để hứng dữ liệu từ C++ trả về
     final outJpegDataPtr = calloc<Pointer<Uint8>>();
     final outJpegSizePtr = calloc<Int32>();
+
+    Pointer<Uint8> jpegPointer = nullptr;
 
     try {
       // 1. Gọi hàm C++ (Lúc này C++ sẽ nén ảnh và nhét data vào 2 con trỏ trên)
@@ -601,12 +560,12 @@ class FaceImagePipelineNative {
       // Dùng Uint8List.fromList để copy đứt đoạn ra, an toàn 100%
       final dartJpegBytes = Uint8List.fromList(jpegPointer.asTypedList(size));
 
-      // 4. ⚠️ ĐẶC BIỆT QUAN TRỌNG: Giải phóng RAM mà C++ đã malloc
-      calloc.free(jpegPointer);
-
       return dartJpegBytes;
     } finally {
-      // Giải phóng 2 cái rổ lúc nãy mang đi hứng
+      if (jpegPointer != nullptr && _funcFreeMemoryNative != null) {
+        _funcFreeMemoryNative!(jpegPointer.cast<Void>());
+      }
+
       calloc.free(outJpegDataPtr);
       calloc.free(outJpegSizePtr);
     }

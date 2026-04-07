@@ -12,6 +12,7 @@ import '../../app/services/web_socket_service.dart';
 import '../../app/extensions/app_profiler.dart';
 import '../../app/services/device_service.dart';
 import '../../app/services/face_quality_service.dart';
+import '../../app/services/ml_kit_face_service.dart';
 
 class HomeController extends GetxController {
   var isLoadingAI = false.obs;
@@ -60,6 +61,15 @@ class HomeController extends GetxController {
         await AppProfiler.measureAsync('Face_Native_Init', () async {
           FaceImagePipelineNative.init();
         });
+
+        if (!Get.isRegistered<MLKitFaceService>()) {
+          AppLog.info("⏳ Đang khởi tạo và Warm-up Google ML Kit...");
+          await AppProfiler.measureAsync('ML_Kit_Init', () async {
+            final mlKitService = MLKitFaceService();
+            await mlKitService.warmUp(); // Chạy warmup tốn ~450ms
+            Get.put(mlKitService, permanent: true); // Ném vào GetX
+          });
+        }
 
         await AppProfiler.measureAsync('Parallel_AI_Init', () async {
           final aiService = FaceRecognitionService();

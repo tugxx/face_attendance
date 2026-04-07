@@ -4,20 +4,42 @@ import 'package:flutter/foundation.dart';
 import '../services/log_service.dart';
 
 class AppProfiler {
-  /// Hàm bọc (Wrapper) để đo đạc bất kỳ đoạn code bất đồng bộ (Future) nào
-  static Future<T> measureAsync<T>(
-    String taskName,
-    Future<T> Function() task,
-  ) async {
+  final Stopwatch _totalWatch = Stopwatch();
+  final Stopwatch _stepWatch = Stopwatch();
+  final Map<String, int> _metrics = {};
+
+  void start() {
+    if (kReleaseMode) return; // Không tốn CPU trên Production
+    _totalWatch.start();
+    _stepWatch.start();
+  }
+
+  Future<T> measureStep<T>(String stepName, Future<T> Function() task) async {
     // NẾU LÀ BẢN RELEASE (Đẩy lên CH Play), KHÔNG LÀM GÌ CẢ (Chạy thẳng hàm luôn)
     if (kReleaseMode) {
       return await task();
     }
 
-    // NẾU LÀ DEBUG: Bắt đầu bấm giờ
+    return await Timeline.timeSync(stepName, () async {
+      final result = await task();
+
+      // Bây giờ hàm này có thể thoải mái truy cập _metrics và _stepWatch
+      _metrics[stepName] = _stepWatch.elapsedMilliseconds;
+      _stepWatch.reset();
+      _stepWatch.start();
+
+      return result;
+    });
+  }
+
+  static Future<T> measureAsync<T>(
+    String taskName,
+    Future<T> Function() task,
+  ) async {
+    if (kReleaseMode) return await task();
+
     final stopwatch = Stopwatch()..start();
     try {
-      // Timeline.timeSync giúp vẽ biểu đồ trên Flutter DevTools
       return await Timeline.timeSync(taskName, () async {
         return await task();
       });
@@ -28,4 +50,19 @@ class AppProfiler {
       );
     }
   }
+
+  void report() {
+    if (kReleaseMode) return;
+    _totalWatch.stop();
+    final details = _metrics.entries
+        .map((e) => "${e.key}: ${e.value}ms")
+        .join(" | ");
+
+    // Đổ ra đúng 1 dòng Log
+    AppLog.info(
+      "⏱️ [FRAME_PIPELINE] Tổng: ${_totalWatch.elapsedMilliseconds}ms 👉 $details",
+    );
+  }
+
+  int? getMetric(String key) => _metrics[key];
 }

@@ -1,11 +1,9 @@
 import 'dart:math';
 import 'dart:convert';
-// import 'dart:io';
 
+import 'package:uuid/uuid.dart';
 import 'package:get/get.dart';
-// import 'package:flutter/foundation.dart';
 import 'package:hive_flutter/hive_flutter.dart';
-// import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:flutter/services.dart';
 
 import '../services/log_service.dart';
@@ -20,36 +18,48 @@ class FaceRecognitionService extends GetxService {
 
   // --- CẤU HÌNH ---
   static const String _modelPath = 'assets/models/mobilefacenet.tflite';
+  String get modelName => _modelPath.split('/').last.replaceAll('.tflite', '');
+
   static const String _dbPath = 'assets/db_mobilefacenet_tflite.json';
   static const double _threshold = 0.60;
-
-  // Thông số Normalize chuẩn của MobileFaceNet
-  static const double normMean = 127.5;
-  static const double normStd = 128.0;
 
   // --- STATE ---;
   late Box _hiveBox;
 
   final int _outputSize = 192;
 
+  int _inputWidth = 112;
+  int _inputHeight = 112;
+
+  int get inputWidth => _inputWidth;
+  int get inputHeight => _inputHeight;
+
   bool get isDatabaseEmpty => _hiveBox.isEmpty;
   double get threshold => _threshold;
+
+  int get recogPixelSize => _inputWidth * _inputHeight * 3;
 
   /// Khởi tạo Service
   Future<void> initialize() async {
     try {
       AppLog.info("🚀 Bắt đầu khởi tạo FaceRecognitionService...");
 
-      // 1. NẠP MODEL CHO C++ (ĐÂY LÀ DÒNG BẠN THIẾU)
-      final isModelLoaded = await NativeAiService().initFaceModel(_modelPath);
-      if (!isModelLoaded) {
+      final encodedDims = await NativeAiService().initFaceModel(_modelPath);
+
+      if (encodedDims <= 0) {
         AppLog.error("❌ FATAL: Không thể nạp Face Model vào C++!");
-        return; // Dừng luôn nếu không nạp được
+        return;
       }
+
+      _inputWidth = encodedDims >> 16;
+      _inputHeight = encodedDims & 0xFFFF;
+
+      AppLog.info(
+        "🛡️ Face Model Auto Configured: ${_inputWidth}x$_inputHeight (RAM: $recogPixelSize bytes)",
+      );
 
       _hiveBox = Hive.box('face_db');
 
-      // 3. Sync Database (Truyền size vào để kiểm tra tính hợp lệ)
       await syncDatabase();
 
       AppLog.info(
@@ -72,12 +82,21 @@ class FaceRecognitionService extends GetxService {
       int successCount = 0;
       for (var key in _hiveBox.keys) {
         // Ép kiểu dynamic về List<double> an toàn
-        final rawList = _hiveBox.get(key);
-        if (rawList is List) {
-          List<double> vector = List<double>.from(rawList);
+        final rawData = _hiveBox.get(key);
+        if (rawData is Map) {
+          final mapData = Map<String, dynamic>.from(rawData);
+          final String templateId =
+              mapData['template_id']?.toString() ?? "unknown_id";
+          final List<dynamic> rawVector = mapData['vector'] ?? [];
+
+          List<double> vector = List<double>.from(rawVector);
 
           if (vector.length == _outputSize) {
-            NativeAiService().addFaceToNative(key.toString(), vector);
+            NativeAiService().addFaceToNative(
+              key.toString(),
+              vector,
+              templateId,
+            );
             successCount++;
           } else {
             conflictCount++;
@@ -108,13 +127,18 @@ class FaceRecognitionService extends GetxService {
       int count = 0;
 
       jsonData.forEach((key, value) {
-        // Chỉ update nếu Hive chưa có hoặc muốn ghi đè (ở đây mình chọn ghi đè để JSON là nhất)
-        final embedding = List<double>.from(value);
+        if (value is Map<String, dynamic>) {
+          final String templateId =
+              value['template_id']?.toString() ?? "json_id_$key";
 
-        if (embedding.length == _outputSize) {
-          _hiveBox.put(key, embedding);
-          NativeAiService().addFaceToNative(key, embedding);
-          count++;
+          // Chỉ update nếu Hive chưa có hoặc muốn ghi đè (ở đây mình chọn ghi đè để JSON là nhất)
+          final embedding = List<double>.from(value['vector'] ?? []);
+
+          if (embedding.length == _outputSize) {
+            _hiveBox.put(key, value);
+            NativeAiService().addFaceToNative(key, embedding, templateId);
+            count++;
+          }
         }
       });
 
@@ -127,7 +151,7 @@ class FaceRecognitionService extends GetxService {
   Future<RecognitionResult> predict(List<double> inputTensor) async {
     // 1. Guard Clause (Bảo vệ)
     if (isDatabaseEmpty) {
-      return RecognitionResult("SystemNotReady", 0.0, true);
+      return RecognitionResult("Error", 0.0, true, "", "Unknown", 0.0);
     }
 
     try {
@@ -136,7 +160,7 @@ class FaceRecognitionService extends GetxService {
       return NativeAiService().predictFace(inputTensor, threshold);
     } catch (e) {
       AppLog.error("❌ Lỗi khi predict: $e");
-      return RecognitionResult("Error", 0.0, true);
+      return RecognitionResult("Error", 0.0, true, "", "Unknown", 0.0);
     }
   }
 
@@ -154,8 +178,6 @@ class FaceRecognitionService extends GetxService {
   }
 
   Future<bool> register(String name, List<double> inputTensor) async {
-    // Xóa đoạn check _interpreter == null vì giờ ta dùng C++
-
     if (inputTensor.isEmpty) {
       AppLog.warning("⚠️ Lỗi: Dữ liệu đầu vào rỗng, không thể đăng ký.");
       return false;
@@ -173,13 +195,20 @@ class FaceRecognitionService extends GetxService {
         return false;
       }
 
+      final String newTemplateId = const Uuid().v4();
+
       // 3. ĐẨY XUỐNG RAM CỦA C++ (Cực kỳ quan trọng để Predict nhận ra người này)
-      NativeAiService().addFaceToNative(name, embedding);
+      NativeAiService().addFaceToNative(name, embedding, newTemplateId);
 
       // 4. Lưu vào ổ cứng (Hive)
-      await _hiveBox.put(name, embedding);
+      await _hiveBox.put(name, {
+        'template_id': newTemplateId,
+        'vector': embedding,
+      });
 
-      // AppLog.info("✅ Đã đăng ký thành công: $name (Vector size: ${embedding.length})");
+      AppLog.info(
+        "✅ Đã đăng ký thành công: $name (Vector size: ${embedding.length})",
+      );
       return true;
     } catch (e) {
       AppLog.error("❌ Lỗi đăng ký: $e");
@@ -205,14 +234,21 @@ class FaceRecognitionService extends GetxService {
 
       // 2. Lấy Embedding CŨ từ Database (RAM Dart)
       List<double>? oldEmbedding;
+      String currentTemplateId = const Uuid().v4();
+
       final rawData = _hiveBox.get(name);
 
-      if (rawData is List) {
+      if (rawData is Map) {
+        currentTemplateId =
+            rawData['template_id']?.toString() ?? currentTemplateId;
+        if (rawData['vector'] != null) {
+          oldEmbedding = (rawData['vector'] as List)
+              .map((e) => double.parse(e.toString()))
+              .toList();
+        }
+      } else if (rawData is List) {
+        // Đề phòng còn dính data cũ
         oldEmbedding = List<double>.from(rawData);
-      } else if (rawData is Map && rawData['vector'] != null) {
-        oldEmbedding = (rawData['vector'] as List)
-            .map((e) => double.parse(e.toString()))
-            .toList();
       }
 
       if (oldEmbedding == null || oldEmbedding.length != newEmbedding.length) {
@@ -230,13 +266,16 @@ class FaceRecognitionService extends GetxService {
       mergedEmbedding = _l2Normalize(mergedEmbedding);
 
       // 5. LƯU LẠI Ở CẢ 3 NƠI
-      NativeAiService().addFaceToNative(name, mergedEmbedding); // Update C++
-      if (rawData is Map) {
-        rawData['vector'] = mergedEmbedding;
-        await _hiveBox.put(name, rawData);
-      } else {
-        await _hiveBox.put(name, mergedEmbedding);
-      }
+      NativeAiService().addFaceToNative(
+        name,
+        mergedEmbedding,
+        currentTemplateId,
+      ); // Update C++
+
+      await _hiveBox.put(name, {
+        'template_id': currentTemplateId,
+        'vector': mergedEmbedding,
+      });
 
       AppLog.info("♻️ Đã cập nhật vector cho: $name");
       return true;

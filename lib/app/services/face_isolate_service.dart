@@ -78,7 +78,9 @@ class FaceIsolateService extends GetxService {
     required int rectH,
     required int rotation,
     required int spoofSize,
-    required double threshold,
+    required double recognitionThreshold,
+    required double spoofThreshold,
+    required double qualityThreshold,
   }) async {
     if (!_isReady) return null;
 
@@ -103,7 +105,9 @@ class FaceIsolateService extends GetxService {
       rotation, // 10
       0, // 11: type = 0: Dual Task
       spoofSize, // 12
-      threshold, // 13
+      recognitionThreshold, // 13:
+      spoofThreshold, // 14
+      qualityThreshold, // 15
     ]);
 
     final result = await completer.future;
@@ -116,6 +120,7 @@ class FaceIsolateService extends GetxService {
     required int height,
     required Face face,
     required int rotation,
+    required int recogPixelSize,
   }) async {
     if (!_isReady) return null;
 
@@ -126,17 +131,19 @@ class FaceIsolateService extends GetxService {
     final landmarksData = _extractLandmarks(face);
 
     _sendPort.send([
-      reqId,
-      address,
-      width,
-      height,
-      0, // yStride (Không cần cho mode này, cứ truyền 0)
-      landmarksData,
-      0, 0, 0, 0, // rect (Không dùng)
-      rotation,
-      1, // 👈 type = 1: Báo cho Isolate biết đây là tác vụ ĐĂNG KÝ
-      0, // spoofSize
-      0.0, // threshold (không dùng, truyền 0.0) để mảng đủ độ dài
+      reqId, // 0
+      address, // 1
+      width, // 2
+      height, // 3
+      0, // 4: yStride (Không dùng)
+      landmarksData, // 5
+      0, 0, 0, 0, // 6, 7, 8, 9: rect (Không dùng)
+      rotation, // 10
+      1, // 11: taskType = 1 (Registration)
+      recogPixelSize, // 12: 👉 Đặt ở vị trí 12
+      0.0, // 13: Padding cho bằng DualTask
+      0.0, // 14: Padding
+      0.0, // 15: Padding
     ]);
 
     final result = await completer.future;
@@ -230,8 +237,9 @@ class FaceIsolateService extends GetxService {
         final Pointer<Uint8> ptrYuv = Pointer<Uint8>.fromAddress(address);
 
         if (taskType == 0) {
-          final int spoofTargetSize = message[12];
-          final double threshold = message[13];
+          final double recognitionThreshold = message[13];
+          final double spoofThreshold = message[14];
+          final double qualityThreshold = message[15];
 
           final result = FaceImagePipelineNative.processDualTask(
             ptrYuv: ptrYuv,
@@ -244,9 +252,9 @@ class FaceIsolateService extends GetxService {
             rectY: rectY,
             rectW: rectW,
             rectH: rectH,
-            spoofWidth: spoofTargetSize,
-            spoofHeight: spoofTargetSize,
-            threshold: threshold,
+            recognitionThreshold: recognitionThreshold,
+            spoofThreshold: spoofThreshold,
+            qualityThreshold: qualityThreshold,
           );
 
           // Trả về: [ID, Dữ liệu]
@@ -255,6 +263,8 @@ class FaceIsolateService extends GetxService {
           // ----------------------------------------------------
           // TYPE 1: ĐĂNG KÝ KHOÉT ẢNH VÀ TẠO JPG
           // ----------------------------------------------------
+          final int recogPixelSize = message[12];
+
           final RegistrationResult? result =
               FaceImagePipelineNative.processRegistration(
                 ptrYuv: ptrYuv, // Đã có sẵn từ address
@@ -262,6 +272,7 @@ class FaceIsolateService extends GetxService {
                 height: height, // Đã nhận từ message
                 landmarks: landmarks, // Đã nhận từ message
                 rotation: rotation, // Đã nhận từ message
+                recogPixelSize: recogPixelSize,
               );
 
           if (result == null) {

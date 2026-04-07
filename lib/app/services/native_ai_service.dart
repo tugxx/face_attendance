@@ -7,14 +7,26 @@ import '../../app/services/log_service.dart';
 
 class RecognitionResult {
   final String name;
-  final double distance;
+  final double score;
   final bool isUnknown;
+  final String matchedTemplateId;
+  final String imposterName;
+  final double imposterScore;
 
-  RecognitionResult(this.name, this.distance, this.isUnknown);
+  RecognitionResult(
+    this.name,
+    this.score,
+    this.isUnknown,
+    this.matchedTemplateId,
+    this.imposterName,
+    this.imposterScore,
+  );
 
   @override
   String toString() {
-    return 'Tên: $name, Điểm: ${(distance * 100).toStringAsFixed(1)}%, Lạ mặt: $isUnknown';
+    return 'Tên: $name, Điểm: ${(score * 100).toStringAsFixed(1)}%, Lạ mặt: $isUnknown\n'
+        'Template ID: $matchedTemplateId\n'
+        'Imposter (Giống thứ 2): $imposterName, Điểm Imposter: ${(imposterScore * 100).toStringAsFixed(1)}%';
   }
 }
 
@@ -40,9 +52,19 @@ typedef ExtractFeatureDart =
 
 // 3. Quản lý Database trên RAM C++
 typedef RegisterFaceC =
-    Void Function(Pointer<Utf8> name, Pointer<Float> embedding, Int32 size);
+    Void Function(
+      Pointer<Utf8> name,
+      Pointer<Float> embedding,
+      Int32 size,
+      Pointer<Utf8> templateId,
+    );
 typedef RegisterFaceDart =
-    void Function(Pointer<Utf8> name, Pointer<Float> embedding, int size);
+    void Function(
+      Pointer<Utf8> name,
+      Pointer<Float> embedding,
+      int size,
+      Pointer<Utf8> templateId,
+    );
 
 typedef ClearDatabaseC = Void Function();
 typedef ClearDatabaseDart = void Function();
@@ -54,7 +76,10 @@ typedef PredictFaceC =
       Int32 inputSize,
       Float threshold,
       Pointer<Utf8> outName,
-      Pointer<Float> outDistance,
+      Pointer<Utf8> outTemplateId,
+      Pointer<Utf8> outImposterName,
+      Pointer<Float> outScore,
+      Pointer<Float> outImposterScore,
     );
 typedef PredictFaceDart =
     int Function(
@@ -62,7 +87,10 @@ typedef PredictFaceDart =
       int inputSize,
       double threshold,
       Pointer<Utf8> outName,
-      Pointer<Float> outDistance,
+      Pointer<Utf8> outTemplateId,
+      Pointer<Utf8> outImposterName,
+      Pointer<Float> outScore,
+      Pointer<Float> outImposterScore,
     );
 
 typedef PredictSpoofC = Float Function(Pointer<Float> input, Int32 inputSize);
@@ -149,8 +177,8 @@ class NativeAiService {
   }
 
   /// Khởi tạo Face Model từ thư mục Assets
-  Future<bool> initFaceModel(String modelPath) async {
-    if (_faceBuffer != null) return true; // Đã khởi tạo rồi thì bỏ qua
+  Future<int> initFaceModel(String modelPath) async {
+    if (_faceBuffer != null) return 1; // Đã khởi tạo rồi thì bỏ qua
 
     try {
       _openLibrary();
@@ -163,21 +191,10 @@ class NativeAiService {
       _faceBuffer!.asTypedList(faceBytes.length).setAll(0, faceBytes);
 
       // 3. Gọi C++ khởi tạo Interpreter
-      final result = _initFaceModelNative(
-        _faceBuffer!.cast<Void>(),
-        faceBytes.length,
-      );
-
-      if (result == 1) {
-        AppLog.info("🎉 C++ Đã nạp xong Face Model!");
-        return true;
-      } else {
-        AppLog.error("❌ C++ nạp Face Model thất bại!");
-        return false;
-      }
+      return _initFaceModelNative(_faceBuffer!.cast<Void>(), faceBytes.length);
     } catch (e) {
       AppLog.error("❌ Lỗi FFI Init Face Model: $e");
-      return false;
+      return -1;
     }
   }
 
@@ -193,20 +210,26 @@ class NativeAiService {
       _spoofBuffer = calloc<Uint8>(spoofBytes.length);
       _spoofBuffer!.asTypedList(spoofBytes.length).setAll(0, spoofBytes);
 
-      final result = _initSpoofModelNative(
+      final int encodedDims = _initSpoofModelNative(
         _spoofBuffer!.cast<Void>(),
         spoofBytes.length,
       );
 
-      if (result == 1) {
-        // AppLog.info("🛡️ C++ Đã nạp xong Anti-Spoof Model!");
+      if (encodedDims > 0) {
+        // 👉 GIẢI MÃ: Lấy 16 bit đầu làm Width, 16 bit sau làm Height
+        int inputWidth = encodedDims >> 16;
+        int inputHeight = encodedDims & 0xFFFF;
+
+        AppLog.info(
+          "🛡️ Nạp Anti-Spoof Model thành công! Auto Config: ${inputWidth}x$inputHeight",
+        );
         return true;
       } else {
         AppLog.error("❌ C++ nạp Anti-Spoof Model thất bại!");
         return false;
       }
     } catch (e) {
-      // AppLog.error("❌ Lỗi FFI Init Anti-Spoof Model: $e");
+      AppLog.error("❌ Lỗi FFI Init Anti-Spoof Model: $e");
       return false;
     }
   }
@@ -241,19 +264,26 @@ class NativeAiService {
   }
 
   /// Bơm 1 khuôn mặt vào RAM của C++
-  void addFaceToNative(String name, List<double> embedding) {
+  void addFaceToNative(String name, List<double> embedding, String templateId) {
     // Chuyển String Dart thành char* C++
     final nativeName = name.toNativeUtf8();
+    final nativeTemplateId = templateId.toNativeUtf8();
 
     // Cấp phát bộ nhớ C++ và copy List<double> sang Float*
     final pointer = calloc<Float>(embedding.length);
     pointer.asTypedList(embedding.length).setAll(0, embedding);
 
     // Gửi xuống C++
-    _registerFaceNative(nativeName, pointer, embedding.length);
+    _registerFaceNative(
+      nativeName,
+      pointer,
+      embedding.length,
+      nativeTemplateId,
+    );
 
     // BẮT BUỘC DỌN RÁC (Tránh rò rỉ RAM)
     calloc.free(nativeName);
+    calloc.free(nativeTemplateId);
     calloc.free(pointer);
   }
 
@@ -264,7 +294,10 @@ class NativeAiService {
 
     // 2. Chuẩn bị 2 THÙNG RỖNG để hứng Tên và Điểm
     final outNamePtr = calloc<Uint8>(256).cast<Utf8>(); // Cấp 256 byte cho Tên
-    final outDistPtr = calloc<Float>(1); // Cấp 1 ô Float cho Điểm
+    final outTemplateIdPtr = calloc<Uint8>(256).cast<Utf8>(); // Thêm
+    final outImposterNamePtr = calloc<Uint8>(256).cast<Utf8>();
+    final outScorePtr = calloc<Float>(1); // Cấp 1 ô Float cho Điểm
+    final outImposterScorePtr = calloc<Float>(1);
 
     // 3. Chuyển cho C++ xử lý (C++ sẽ ghi đè dữ liệu vào 2 thùng này)
     final status = _predictFaceNative(
@@ -272,25 +305,41 @@ class NativeAiService {
       inputPixels.length,
       threshold,
       outNamePtr,
-      outDistPtr,
+      outTemplateIdPtr,
+      outImposterNamePtr,
+      outScorePtr,
+      outImposterScorePtr,
     );
 
     RecognitionResult result;
     if (status == 0) {
-      result = RecognitionResult("Error", 0.0, true);
+      result = RecognitionResult("Error", 0.0, true, "", "Unknown", 0.0);
     } else {
       // 4. Mở thùng lấy dữ liệu
       final name = outNamePtr.toDartString();
-      final distance = outDistPtr.value;
+      final score = outScorePtr.value;
       final isUnknown = (status == 2);
+      final matchedTemplateId = outTemplateIdPtr.toDartString();
+      final imposterName = outImposterNamePtr.toDartString();
+      final imposterScore = outImposterScorePtr.value;
 
-      result = RecognitionResult(name, distance, isUnknown);
+      result = RecognitionResult(
+        name,
+        score,
+        isUnknown,
+        matchedTemplateId,
+        imposterName,
+        imposterScore,
+      );
     }
 
     // Bắt buộc dọn rác
     calloc.free(inputPtr);
     calloc.free(outNamePtr);
-    calloc.free(outDistPtr);
+    calloc.free(outTemplateIdPtr);
+    calloc.free(outImposterNamePtr);
+    calloc.free(outScorePtr);
+    calloc.free(outImposterScorePtr);
 
     return result;
   }
@@ -323,14 +372,26 @@ class NativeAiService {
       _qualityBuffer!.asTypedList(bytes.length).setAll(0, bytes);
 
       // Truyền con trỏ xuống C++
-      final result = _initQualityModelNative(
+      final int encodedDims = _initQualityModelNative(
         _qualityBuffer!.cast<Void>(),
         bytes.length,
       );
 
-      return result == 1; // 1 là thành công, 0 là thất bại
+      if (encodedDims > 0) {
+        // 👉 GIẢI MÃ: Lấy 16 bit đầu làm Width, 16 bit sau làm Height
+        int inputWidth = encodedDims >> 16;
+        int inputHeight = encodedDims & 0xFFFF;
+
+        AppLog.info(
+          "🛡️ Nạp Quality Model thành công! Auto Config: ${inputWidth}x$inputHeight",
+        );
+        return true;
+      } else {
+        AppLog.error("❌ C++ nạp Quality Model thất bại!");
+        return false;
+      }
     } catch (e) {
-      // AppLog.error("❌ Lỗi nạp Quality Model: $e");
+      AppLog.error("❌ Lỗi nạp Quality Model: $e");
       return false;
     }
   }

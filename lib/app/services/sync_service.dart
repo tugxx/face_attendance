@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:async';
+import 'package:uuid/uuid.dart';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -309,6 +310,9 @@ class SyncService {
               // Học sinh mới hoặc cập nhật mặt
               final faceVectorRaw = user['face_vector'];
 
+              final String templateId =
+                  user['template_id']?.toString() ?? const Uuid().v4();
+
               if (faceVectorRaw != null) {
                 // Đảm bảo ép kiểu an toàn từ JSON Array (dynamic) sang List<double>
                 List<double> vector = (faceVectorRaw as List)
@@ -318,11 +322,14 @@ class SyncService {
                 if (vector.length == 192) {
                   await faceBox.put(studentId, {
                     'name': user['full_name'] ?? 'Unknown',
+                    'template_id': templateId,
                     'vector': vector,
                   });
+
                   NativeAiService().addFaceToNative(
                     studentId,
                     vector,
+                    templateId,
                   ); // 3. Cập nhật RAM C++ (Ghi đè hoặc Thêm mới)
                   totalUpdated++;
                 }

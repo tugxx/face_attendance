@@ -1,8 +1,10 @@
 cmake_minimum_required(VERSION 3.4.1)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # 1. Trỏ thư mục include để C++ đọc được file .h
 include_directories(
-        core
+        core/include
         utils
         third_party/stb
         third_party/tflite/include)
@@ -12,9 +14,10 @@ add_library(
         SHARED
         bridge/native_bridge.cpp        # Mặt tiền FFI
         utils/native_face_align.cpp     # File cắt ảnh
-        core/face_recognizer.cpp        # Nhận diện
-        core/anti_spoofing.cpp          # Chống giả mạo
-        core/face_quality.cpp
+        core/src/face_recognizer.cpp        # Nhận diện
+        core/src/anti_spoofing.cpp          # Chống giả mạo
+        core/src/face_quality.cpp           # Chấm điểm ảnh
+        core/src/face_pipeline.cpp
 )        
 
 # 2. Báo cho CMake biết ta có thư viện TFLite JNI

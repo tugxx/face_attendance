@@ -18,6 +18,7 @@ class FaceAntiSpoofingService extends GetxService {
   FaceAntiSpoofingService._internal();
 
   static const String _modelPath = 'assets/models/fasnet_float32.tflite';
+  String get modelName => _modelPath.split('/').last.replaceAll('.tflite', '');
 
   // Ngưỡng tin cậy
   static const double _threshold = 0.6;
@@ -36,16 +37,7 @@ class FaceAntiSpoofingService extends GetxService {
 
   Future<void> initialize() async {
     try {
-      // AppLog.info("🛡️ Khởi tạo FaceAntiSpoofingService qua Native C++...");
-
-      // Ném file model xuống C++
       _isReady = await NativeAiService().initSpoofModel(_modelPath);
-
-      if (_isReady) {
-        // AppLog.info("🚀 HOÀN THÀNH KHỞI TẠO ANTI-SPOOFING MODEL (Zero-Copy)!");
-      } else {
-        // AppLog.error("❌ Khởi tạo Anti-Spoofing thất bại!");
-      }
     } catch (e, stackTrace) {
       AppLog.error("❌ LỖI TẠI KHÂU KHỞI TẠO ANTI-SPOOFING MODEL!");
       AppLog.error("Chi tiết lỗi: $e");

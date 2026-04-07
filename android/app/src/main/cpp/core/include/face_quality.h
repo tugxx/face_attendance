@@ -3,13 +3,10 @@
 #include "tensorflow/lite/c/c_api.h"
 #include <algorithm>
 
-// Include macro LOGI của bạn ở đây. Ví dụ (nếu dùng Android NDK):
-// #include <android/log.h>
-// #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "FaceQuality",
-// __VA_ARGS__)
-
 class FaceQuality {
 private:
+  int inputWidth, inputHeight;
+
   // Constructor Private cho Singleton
   FaceQuality() : qualityModel(nullptr), qualityInterpreter(nullptr) {}
 
@@ -41,10 +38,13 @@ public:
   }
 
   // Khởi tạo model từ mảng byte truyền từ Dart xuống
-  bool InitQualityModel(const void *modelData, int modelSize);
+  int InitQualityModel(const void *modelData, int modelSize);
 
-  // Nhận mảng float pixel (đã chuẩn hóa) và trả về điểm số chất lượng
-  float PredictQuality(const float *inputPixels, int pixelsCount);
+  float PredictQualityFromYuv(const unsigned char *yuvData, int imgW, int imgH,
+                              int rotation, int rectX, int rectY, int rectW,
+                              int rectH);
+
+  float PredictQualityFromPixels(const float *inputPixels, int pixelsCount);
 };
 
 // ====================================================================
