@@ -27,24 +27,28 @@ private:
   TfLiteModel *faceModel;
   TfLiteInterpreter *faceInterpreter;
 
-  // Database lưu trên RAM
   std::vector<FaceTemplateData> faceDatabase;
 
-  // Singleton instance
-  static FaceRecognizer *instance;
+  // static FaceRecognizer *instance;
 
   int featureSize = 0;
 
-  // Private constructor (Singleton)
-  FaceRecognizer() : faceModel(nullptr), faceInterpreter(nullptr) {}
+  // FaceRecognizer() : faceModel(nullptr), faceInterpreter(nullptr) {}
 
   void L2Normalize(float *embedding, int size);
   float CosineSimilarity(const std::vector<float> &v1,
                          const std::vector<float> &v2);
 
 public:
-  static FaceRecognizer *GetInstance();
+  FaceRecognizer() : faceModel(nullptr), faceInterpreter(nullptr) {}
+
+  // static FaceRecognizer *GetInstance();
   int inputWidth, inputHeight;
+
+  int recogSize = 0;
+  float *sharedBuffer = nullptr;
+  float *tfliteInputData = nullptr;
+  float *tfliteOutputData = nullptr;
 
   // Các hàm xử lý
   int InitFaceModel(const void *faceData, int faceSize);
@@ -68,4 +72,6 @@ public:
 
   void MergeAndNormalize(const float *v1, const float *v2, int size,
                          float *outVec);
+
+  void Release();
 };

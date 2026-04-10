@@ -1,5 +1,6 @@
 #include "face_pipeline.h"
 #include "anti_spoofing.h"
+#include "app_log.h"
 #include "face_quality.h"
 #include "face_recognizer.h"
 
@@ -35,14 +36,16 @@ extern "C" void get_pixel_yuv_rotated(const uint8_t *yuv, int width, int height,
                                       int stride, int x, int y, int rotation,
                                       uint8_t *r, uint8_t *g, uint8_t *b);
 
-// Singleton instance
-FacePipeline *FacePipeline::instance = nullptr;
-
-FacePipeline *FacePipeline::GetInstance() {
-  if (instance == nullptr) {
-    instance = new FacePipeline();
-  }
-  return instance;
+int FacePipeline::InitModels(const void *recogData, int recogSize,
+                             const void *spoofData, int spoofSize,
+                             const void *qualityData, int qualitySize) {
+  if (recogData && recogSize > 0)
+    recognizer->InitFaceModel(recogData, recogSize);
+  if (spoofData && spoofSize > 0)
+    spoofing->InitSpoofModel(spoofData, spoofSize);
+  if (qualityData && qualitySize > 0)
+    quality->InitQualityModel(qualityData, qualitySize);
+  return 1;
 }
 
 int FacePipeline::ProcessDualTask(const unsigned char *yuvData, int width,
@@ -56,7 +59,7 @@ int FacePipeline::ProcessDualTask(const unsigned char *yuvData, int width,
                                   float *outQualityScore, bool *outIsReal) {
 
   // 1. CHẠY FACE QUALITY
-  float qualityScore = FaceQuality::GetInstance()->PredictQualityFromYuv(
+  float qualityScore = this->quality->PredictQualityFromYuv(
       yuvData, width, height, rotation, rectX, rectY, rectW, rectH);
   *outQualityScore = qualityScore;
 
@@ -65,12 +68,11 @@ int FacePipeline::ProcessDualTask(const unsigned char *yuvData, int width,
   }
 
   // 3. CHẠY AI PIPELINE
-  RecognitionResult recognitionResult =
-      FaceRecognizer::GetInstance()->PredictFaceFromYuv(
-          yuvData, width, height, landmarks, rotation, rectX, rectY, rectW,
-          rectH, recognitionThreshold);
+  RecognitionResult recognitionResult = this->recognizer->PredictFaceFromYuv(
+      yuvData, width, height, landmarks, rotation, rectX, rectY, rectW, rectH,
+      recognitionThreshold);
 
-  SpoofResult spoofResult = AntiSpoofing::GetInstance()->PredictSpoofFromYuv(
+  SpoofResult spoofResult = this->spoofing->PredictSpoofFromYuv(
       yuvData, width, height, rotation, rectX, rectY, rectW, rectH,
       spoofThreshold);
 
@@ -104,13 +106,19 @@ int FacePipeline::ProcessRegistration(const unsigned char *yuvData, int width,
                                       unsigned char *outJpgBytes,
                                       int *outJpgSize) {
 
-  int recogW = FaceRecognizer::GetInstance()->inputWidth;
-  int recogH = FaceRecognizer::GetInstance()->inputHeight;
+  int recogW = this->recognizer->inputWidth;
+  int recogH = this->recognizer->inputHeight;
   int recogSize = recogW * recogH * 3;
 
   // 1. Cắt ảnh bằng hàm Affine
-  process_face_affine((uint8_t *)yuvData, width, height, (float *)landmarks,
-                      rotation, outAiPixels);
+  bool alignSuccess =
+      process_face_affine((uint8_t *)yuvData, width, height, (float *)landmarks,
+                          rotation, recogW, recogH, outAiPixels);
+
+  if (!alignSuccess) {
+    LOG_ERROR("Căn chỉnh khuôn mặt thất bại (ProcessRegistration)");
+    return 0;
+  }
 
   // 2. Chuyển float thành byte RGB (0-255) để vẽ JPG
   unsigned char *rgbPixels = (unsigned char *)malloc(recogSize);

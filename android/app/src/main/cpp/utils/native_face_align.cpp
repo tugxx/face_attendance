@@ -75,8 +75,22 @@ int get_pixel_from_yuv(uint8_t *yuv, int width, int height, float logicX,
 
 // --- HÀM CHÍNH: ALIGN FACE ---
 // landmarks: Mảng float 10 phần tử [x1, y1, x2, y2...]
-void process_face_affine(uint8_t *yuvBytes, int width, int height,
-                         float *landmarks, int rotation, float *outputBuffer) {
+bool process_face_affine(uint8_t *yuvBytes, int width, int height,
+                         float *landmarks, int rotation, int inputWidth,
+                         int inputHeight, float *outputBuffer) {
+  if (yuvBytes == nullptr) {
+    LOG_ERROR("LỖI: yuvBytes bị NULL!");
+    return false;
+  }
+  if (outputBuffer == nullptr) {
+    LOG_ERROR("LỖI: outputBuffer bị NULL!");
+    return false;
+  }
+  if (landmarks == nullptr) {
+    LOG_ERROR("LỖI: landmarks bị NULL!");
+    return false;
+  }
+
   // 1. TÍNH MA TRẬN AFFINE (Dựa trên 2 mắt như code Dart)
   // Src = Landmarks từ Camera
   float src_eye_x = (landmarks[0] + landmarks[2]) / 2.0f; // Tâm mắt trái + phải
@@ -85,6 +99,11 @@ void process_face_affine(uint8_t *yuvBytes, int width, int height,
   float dx = landmarks[2] - landmarks[0];
   float dy = landmarks[3] - landmarks[1];
   float src_dist = sqrt(dx * dx + dy * dy);
+  if (src_dist < 1.0f) {
+    LOG_ERROR("LỖI: Khoảng cách 2 mắt quá nhỏ");
+    return false;
+  }
+
   float src_angle = atan2(dy, dx);
 
   // Dst = Điểm chuẩn (Ref Points)
@@ -125,22 +144,41 @@ void process_face_affine(uint8_t *yuvBytes, int width, int height,
   float E = cosR * idet;
   float F = (sinR * tx - cosR * ty) * idet;
 
-  // 3. WARP LOOP (112x112)
-  int targetSize = 112;
+  // 3. WARP LOOP
   int pIdx = 0;
 
-  for (int y = 0; y < targetSize; y++) {
-    for (int x = 0; x < targetSize; x++) {
+  for (int y = 0; y < inputHeight; y++) {
+    for (int x = 0; x < inputWidth; x++) {
 
       // Ánh xạ ngược: Từ (x,y) đích -> (srcX, srcY) nguồn
       // srcX = x * A + y * B + C
       float srcX = x * A + y * B + C;
       float srcY = x * D + y * E + F;
 
-      // Lấy màu tại (srcX, srcY) từ YUV gốc
-      // Hàm này đã xử lý việc Camera bị xoay 90/270 độ
-      int rgb =
-          get_pixel_from_yuv(yuvBytes, width, height, srcX, srcY, rotation);
+      ////////////////////////////////
+      // Làm tròn thành số nguyên để dễ check bounds
+      int ix = static_cast<int>(srcX);
+      int iy = static_cast<int>(srcY);
+
+      // 🛡️ CHỐT CHẶN 2: Ép tọa độ không bao giờ được
+      // lọt ra ngoài ảnh gốc (Clamp) Nếu không có 4 dòng này, C++ sẽ thọc tay
+      // vào vùng nhớ cấm và Crash.
+      if (ix < 0)
+        ix = 0;
+      if (ix >= width)
+        ix = width - 1;
+      if (iy < 0)
+        iy = 0;
+      if (iy >= height)
+        iy = height - 1;
+
+      // // Lấy màu tại (srcX, srcY) từ YUV gốc
+      // // Hàm này đã xử lý việc Camera bị xoay 90/270 độ
+      // int rgb =
+      //     get_pixel_from_yuv(yuvBytes, width, height, srcX, srcY, rotation);
+
+      int rgb = get_pixel_from_yuv(yuvBytes, width, height, ix, iy, rotation);
+      /////////////////////////////////////////////////////////////////
 
       int r = (rgb >> 16) & 0xFF;
       int g = (rgb >> 8) & 0xFF;
@@ -152,6 +190,8 @@ void process_face_affine(uint8_t *yuvBytes, int width, int height,
       outputBuffer[pIdx++] = (b - 127.5f) / 128.0f;
     }
   }
+
+  return true;
 }
 
 // ----------------------------------------------------------------------
@@ -165,8 +205,7 @@ void process_file_affine_raw(char *filePath, float *landmarks,
   unsigned char *imgData = stbi_load(filePath, &width, &height, &channels, 3);
 
   if (imgData == NULL) {
-    __android_log_print(ANDROID_LOG_ERROR, "NativeFace",
-                        "Cannot load image: %s", filePath);
+    LOG_ERROR("Cannot load image: %s", filePath);
     return;
   }
 
@@ -303,10 +342,20 @@ void get_pixel_yuv_rotated(const uint8_t *yuv, int width, int height,
 // --------------------------------------------------------
 // HÀM XỬ LÝ ANTI-SPOOFING (Scale -> Crop 80x80)
 // --------------------------------------------------------
-void process_face_crop(uint8_t *yuvPtr, int width, int height, int yStride,
+bool process_face_crop(uint8_t *yuvPtr, int width, int height, int yStride,
                        int rotation, int rX, int rY, int rW, int rH,
                        int target_width, int target_height, float scale,
                        bool is_bgr, float *outputBuffer) {
+
+  if (yuvPtr == nullptr) {
+    LOG_ERROR("LỖI: yuvPtr bị NULL!");
+    return false;
+  }
+  if (outputBuffer == nullptr) {
+    LOG_ERROR("LỖI: outputBuffer bị NULL!");
+    return false;
+  }
+
   int logical_w = width;
   int logical_h = height;
   if (rotation == 90 || rotation == 270) {
@@ -338,7 +387,7 @@ void process_face_crop(uint8_t *yuvPtr, int width, int height, int yStride,
 
   // Safety check: Nếu mặt bay ra khỏi khung hình hoàn toàn
   if (real_crop_w <= 0 || real_crop_h <= 0) {
-    return; // Hoặc fill 0 vào outputBuffer
+    return false; // Hoặc fill 0 vào outputBuffer
   }
 
   // --- BƯỚC 2: EXTRACT (CẮT ẢNH) ---
@@ -411,5 +460,7 @@ void process_face_crop(uint8_t *yuvPtr, int width, int height, int yStride,
       outputBuffer[pIdx++] = (float)b_byte;
     }
   }
+
+  return true;
 }
 }

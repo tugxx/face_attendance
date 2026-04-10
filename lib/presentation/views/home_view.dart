@@ -64,11 +64,15 @@ class HomeView extends GetView<HomeController> {
 
             // --- LỚP OVERLAY LOADING (Chỉ hiện khi isLoadingAI = true) ---
             if (controller.isLoadingAI.value)
-              Container(
-                color: Colors.black.withValues(
-                  alpha: 0.3,
-                ), // Màn mờ chặn thao tác
-                child: const Center(child: CircularProgressIndicator()),
+              AbsorbPointer(
+                child: Container(
+                  color: Colors.black.withValues(
+                    alpha: 0.3,
+                  ), // Màn mờ chặn thao tác
+                  child: const Center(
+                    child: CircularProgressIndicator(color: Colors.white),
+                  ),
+                ),
               ),
           ],
         );

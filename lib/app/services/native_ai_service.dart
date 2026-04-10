@@ -135,6 +135,10 @@ class NativeAiService {
   // 2. Thêm Buffer giữ model Quality trên RAM
   Pointer<Uint8>? _qualityBuffer;
 
+  int? _cachedFaceDims;
+  int? _cachedSpoofDims;
+  int? _cachedQualityDims;
+
   // Hàm phụ trợ đọc asset
   Future<Uint8List> _loadAssetBytes(String path) async {
     final byteData = await rootBundle.load(path);
@@ -178,7 +182,7 @@ class NativeAiService {
 
   /// Khởi tạo Face Model từ thư mục Assets
   Future<int> initFaceModel(String modelPath) async {
-    if (_faceBuffer != null) return 1; // Đã khởi tạo rồi thì bỏ qua
+    if (_faceBuffer != null && _cachedFaceDims != null) return _cachedFaceDims!;
 
     try {
       _openLibrary();
@@ -191,7 +195,11 @@ class NativeAiService {
       _faceBuffer!.asTypedList(faceBytes.length).setAll(0, faceBytes);
 
       // 3. Gọi C++ khởi tạo Interpreter
-      return _initFaceModelNative(_faceBuffer!.cast<Void>(), faceBytes.length);
+      _cachedFaceDims = _initFaceModelNative(
+        _faceBuffer!.cast<Void>(),
+        faceBytes.length,
+      );
+      return _cachedFaceDims!;
     } catch (e) {
       AppLog.error("❌ Lỗi FFI Init Face Model: $e");
       return -1;
@@ -199,8 +207,10 @@ class NativeAiService {
   }
 
   /// Khởi tạo Anti-Spoofing Model
-  Future<bool> initSpoofModel(String modelPath) async {
-    if (_spoofBuffer != null) return true; // Đã khởi tạo rồi thì bỏ qua
+  Future<int> initSpoofModel(String modelPath) async {
+    if (_spoofBuffer != null && _cachedSpoofDims != null) {
+      return _cachedSpoofDims!;
+    }
 
     try {
       _openLibrary(); // Nếu dylib mở rồi thì nó không mở lại đâu, đừng lo
@@ -210,27 +220,15 @@ class NativeAiService {
       _spoofBuffer = calloc<Uint8>(spoofBytes.length);
       _spoofBuffer!.asTypedList(spoofBytes.length).setAll(0, spoofBytes);
 
-      final int encodedDims = _initSpoofModelNative(
+      _cachedSpoofDims = _initSpoofModelNative(
         _spoofBuffer!.cast<Void>(),
         spoofBytes.length,
       );
 
-      if (encodedDims > 0) {
-        // 👉 GIẢI MÃ: Lấy 16 bit đầu làm Width, 16 bit sau làm Height
-        int inputWidth = encodedDims >> 16;
-        int inputHeight = encodedDims & 0xFFFF;
-
-        AppLog.info(
-          "🛡️ Nạp Anti-Spoof Model thành công! Auto Config: ${inputWidth}x$inputHeight",
-        );
-        return true;
-      } else {
-        AppLog.error("❌ C++ nạp Anti-Spoof Model thất bại!");
-        return false;
-      }
+      return _cachedSpoofDims!;
     } catch (e) {
       AppLog.error("❌ Lỗi FFI Init Anti-Spoof Model: $e");
-      return false;
+      return -1;
     }
   }
 
@@ -363,7 +361,11 @@ class NativeAiService {
   // ===========================================================================
 
   /// Đọc file .tflite và ném con trỏ byte xuống C++
-  Future<bool> initQualityModel(String modelPath) async {
+  Future<int> initQualityModel(String modelPath) async {
+    if (_qualityBuffer != null && _cachedQualityDims != null) {
+      return _cachedQualityDims!;
+    }
+
     try {
       final bytes = await _loadAssetBytes(modelPath);
 
@@ -372,27 +374,15 @@ class NativeAiService {
       _qualityBuffer!.asTypedList(bytes.length).setAll(0, bytes);
 
       // Truyền con trỏ xuống C++
-      final int encodedDims = _initQualityModelNative(
+      _cachedQualityDims = _initQualityModelNative(
         _qualityBuffer!.cast<Void>(),
         bytes.length,
       );
 
-      if (encodedDims > 0) {
-        // 👉 GIẢI MÃ: Lấy 16 bit đầu làm Width, 16 bit sau làm Height
-        int inputWidth = encodedDims >> 16;
-        int inputHeight = encodedDims & 0xFFFF;
-
-        AppLog.info(
-          "🛡️ Nạp Quality Model thành công! Auto Config: ${inputWidth}x$inputHeight",
-        );
-        return true;
-      } else {
-        AppLog.error("❌ C++ nạp Quality Model thất bại!");
-        return false;
-      }
+      return _cachedQualityDims!;
     } catch (e) {
       AppLog.error("❌ Lỗi nạp Quality Model: $e");
-      return false;
+      return -1;
     }
   }
 

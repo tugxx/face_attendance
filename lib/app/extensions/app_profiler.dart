@@ -54,14 +54,14 @@ class AppProfiler {
   void report() {
     if (kReleaseMode) return;
     _totalWatch.stop();
-    final details = _metrics.entries
-        .map((e) => "${e.key}: ${e.value}ms")
-        .join(" | ");
+    // final details = _metrics.entries
+    //     .map((e) => "${e.key}: ${e.value}ms")
+    //     .join(" | ");
 
-    // Đổ ra đúng 1 dòng Log
-    AppLog.info(
-      "⏱️ [FRAME_PIPELINE] Tổng: ${_totalWatch.elapsedMilliseconds}ms 👉 $details",
-    );
+    // // Đổ ra đúng 1 dòng Log
+    // AppLog.info(
+    //   "⏱️ [FRAME_PIPELINE] Tổng: ${_totalWatch.elapsedMilliseconds}ms 👉 $details",
+    // );
   }
 
   int? getMetric(String key) => _metrics[key];

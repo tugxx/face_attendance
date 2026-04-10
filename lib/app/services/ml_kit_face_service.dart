@@ -1,25 +1,39 @@
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
-import 'package:get/get.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 
-class MLKitFaceService extends GetxService {
+class MLKitFaceService {
   late final FaceDetector _detector;
 
-  @override
-  void onInit() {
-    super.onInit();
-    // 1. Cấu hình nằm gọn ở đây, UI không cần biết
-    _detector = FaceDetector(
+  MLKitFaceService({required FaceDetectorOptions options})
+    : _detector = FaceDetector(options: options);
+
+  /// Gói Điểm danh: Ưu tiên Tốc độ (Fast) & Tracking ID
+  factory MLKitFaceService.forAttendance() {
+    return MLKitFaceService(
       options: FaceDetectorOptions(
         performanceMode: FaceDetectorMode.fast,
         enableContours: false,
         enableLandmarks: true,
         enableClassification: false,
-        enableTracking: true,
+        enableTracking: true, // Cần tracking cho streak
         minFaceSize: 0.15,
+      ),
+    );
+  }
+
+  /// Gói Đăng ký: Ưu tiên Độ chính xác (Accurate)
+  factory MLKitFaceService.forRegistration() {
+    return MLKitFaceService(
+      options: FaceDetectorOptions(
+        performanceMode: FaceDetectorMode.accurate,
+        enableContours: false,
+        enableLandmarks: true, // Bắt buộc có để crop mặt thẳng
+        enableClassification: false,
+        enableTracking: false, // Đăng ký thì không cần tracking ID
+        minFaceSize: 0.20, // Bắt người dùng đưa mặt gần hơn chút
       ),
     );
   }
@@ -54,9 +68,7 @@ class MLKitFaceService extends GetxService {
     return _detector.processImage(image);
   }
 
-  @override
-  void onClose() {
+  void dispose() {
     _detector.close();
-    super.onClose();
   }
 }

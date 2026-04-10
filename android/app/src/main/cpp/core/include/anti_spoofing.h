@@ -12,12 +12,13 @@ private:
   TfLiteInterpreter *spoofInterpreter;
   int inputWidth, inputHeight;
 
-  static AntiSpoofing *instance;
-
+public:
   AntiSpoofing() : spoofModel(nullptr), spoofInterpreter(nullptr) {}
 
-public:
-  static AntiSpoofing *GetInstance();
+  int spoofSize = 0;
+  float *sharedBuffer = nullptr;
+  float *tfliteInputData = nullptr;
+  float *tfliteOutputData = nullptr;
 
   int InitSpoofModel(const void *spoofData, int spoofSize);
   SpoofResult PredictSpoofFromYuv(const unsigned char *yuvData, int imgW,
@@ -26,4 +27,6 @@ public:
 
   SpoofResult PredictSpoofFromPixels(const float *inputPixels, int pixelsCount,
                                      float threshold);
+
+  void Release();
 };

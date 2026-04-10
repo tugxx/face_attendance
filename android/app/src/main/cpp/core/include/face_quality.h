@@ -7,10 +7,13 @@ class FaceQuality {
 private:
   int inputWidth, inputHeight;
 
-  // Constructor Private cho Singleton
+  // Pointer giữ Model và Interpreter theo chuẩn C API
+  TfLiteModel *qualityModel;
+  TfLiteInterpreter *qualityInterpreter;
+
+public:
   FaceQuality() : qualityModel(nullptr), qualityInterpreter(nullptr) {}
 
-  // Destructor: Dọn rác khi module bị hủy
   ~FaceQuality() {
     if (qualityInterpreter != nullptr) {
       TfLiteInterpreterDelete(qualityInterpreter);
@@ -22,20 +25,20 @@ private:
     }
   }
 
-  // Pointer giữ Model và Interpreter theo chuẩn C API
-  TfLiteModel *qualityModel;
-  TfLiteInterpreter *qualityInterpreter;
+  // // Vô hiệu hóa Copy Constructor và Assignment Operator để đảm bảo Singleton
+  // FaceQuality(const FaceQuality &) = delete;
+  // FaceQuality &operator=(const FaceQuality &) = delete;
 
-public:
-  // Vô hiệu hóa Copy Constructor và Assignment Operator để đảm bảo Singleton
-  FaceQuality(const FaceQuality &) = delete;
-  FaceQuality &operator=(const FaceQuality &) = delete;
+  // // Cung cấp Instance duy nhất (Thread-safe trong C++11 trở lên)
+  // static FaceQuality *GetInstance() {
+  //   static FaceQuality instance;
+  //   return &instance;
+  // }
 
-  // Cung cấp Instance duy nhất (Thread-safe trong C++11 trở lên)
-  static FaceQuality *GetInstance() {
-    static FaceQuality instance;
-    return &instance;
-  }
+  int qualitySize;
+  float *sharedBuffer = nullptr;
+  float *tfliteInputData = nullptr;
+  float *tfliteOutputData = nullptr;
 
   // Khởi tạo model từ mảng byte truyền từ Dart xuống
   int InitQualityModel(const void *modelData, int modelSize);
@@ -45,6 +48,8 @@ public:
                               int rectH);
 
   float PredictQualityFromPixels(const float *inputPixels, int pixelsCount);
+
+  void Release();
 };
 
 // ====================================================================

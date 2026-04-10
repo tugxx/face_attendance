@@ -1,9 +1,8 @@
 import 'dart:async';
 import 'dart:isolate';
 import 'dart:ffi';
+import 'dart:typed_data';
 
-// import 'package:flutter/foundation.dart';
-// import 'package:ffi/ffi.dart'; //
 import 'package:get/get.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 
@@ -11,15 +10,106 @@ import '../types/face_pipeline.dart';
 import '../services/log_service.dart';
 import '../../data/models/registration_result.dart';
 
-// import 'package:flutter/foundation.dart';
-// import 'package:flutter/services.dart';
-// import 'package:image/image.dart' as img;
+abstract class IsolateTask {
+  final int reqId;
+  IsolateTask({required this.reqId});
+}
 
+class DualTaskRequest extends IsolateTask {
+  final int sessionHandle;
+  final int address;
+  final int width;
+  final int height;
+  final int yStride;
+  final List<double> landmarks;
+  final int rectX, rectY, rectW, rectH;
+  final int rotation;
+  final double recognitionThreshold;
+  final double spoofThreshold;
+  final double qualityThreshold;
+
+  DualTaskRequest({
+    required super.reqId,
+    required this.sessionHandle,
+    required this.address,
+    required this.width,
+    required this.height,
+    required this.yStride,
+    required this.landmarks,
+    required this.rectX,
+    required this.rectY,
+    required this.rectW,
+    required this.rectH,
+    required this.rotation,
+    required this.recognitionThreshold,
+    required this.spoofThreshold,
+    required this.qualityThreshold,
+  });
+}
+
+class RegistrationTaskRequest extends IsolateTask {
+  final int sessionHandle;
+  final int address;
+  final int width;
+  final int height;
+  final List<double> landmarks;
+  final int rotation;
+  final int recogPixelSize;
+
+  RegistrationTaskRequest({
+    required super.reqId,
+    required this.sessionHandle,
+    required this.address,
+    required this.width,
+    required this.height,
+    required this.landmarks,
+    required this.rotation,
+    required this.recogPixelSize,
+  });
+}
+
+class QualityCheckTaskRequest extends IsolateTask {
+  final int sessionHandle;
+  final int address;
+  final int width;
+  final int height;
+  final int rectX, rectY, rectW, rectH;
+  final int rotation;
+
+  QualityCheckTaskRequest({
+    required this.sessionHandle,
+    required super.reqId,
+    required this.address,
+    required this.width,
+    required this.height,
+    required this.rectX,
+    required this.rectY,
+    required this.rectW,
+    required this.rectH,
+    required this.rotation,
+  });
+}
+
+class EncodeJpegRequest extends IsolateTask {
+  final int sessionHandle;
+  final int address;
+  final int width;
+  final int height;
+  final int rotation;
+
+  EncodeJpegRequest({
+    required super.reqId,
+    required this.sessionHandle,
+    required this.address,
+    required this.width,
+    required this.height,
+    required this.rotation,
+  });
+}
 class FaceIsolateService extends GetxService {
-  // late Isolate _isolate;
+  Isolate? _isolate;
   late SendPort _sendPort;
   ReceivePort? _receivePort;
-  // final _responseStream = StreamController<dynamic>.broadcast();
   bool _isReady = false;
 
   final Map<int, Completer<dynamic>> _pendingRequests = {};
@@ -35,15 +125,13 @@ class FaceIsolateService extends GetxService {
     _receivePort = ReceivePort();
 
     // Spawn Isolate
-    Isolate.spawn(_isolateEntryPoint, _receivePort!.sendPort);
+    _isolate = await Isolate.spawn(_isolateEntryPoint, _receivePort!.sendPort);
 
     // Lắng nghe port
     _receivePort!.listen((message) {
       if (message is SendPort) {
         _sendPort = message;
         _isReady = true;
-
-        AppLog.info("✅ FaceIsolateService: Worker Started!");
 
         // 2. MỞ BARIE: Lúc này hàm start() mới thực sự được xem là hoàn thành
         if (!completer.isCompleted) {
@@ -66,7 +154,34 @@ class FaceIsolateService extends GetxService {
     return completer.future;
   }
 
+  void dispose() {
+    if (!_isReady) return;
+    _isReady = false;
+
+    // 1. Đóng cổng nhận tín hiệu (Tránh leak memory Port)
+    _receivePort?.close();
+    _receivePort = null;
+
+    // 2. GIẢI CỨU UI: Hủy bỏ mọi request đang bị kẹt chờ Isolate
+    if (_pendingRequests.isNotEmpty) {
+      for (var completer in _pendingRequests.values) {
+        if (!completer.isCompleted) {
+          // Trả về null để UI tự hiểu là luồng đã bị hủy, không bị treo await
+          completer.complete(null);
+        }
+      }
+      _pendingRequests.clear();
+    }
+
+    // 3. Ra lệnh tàn sát: Giết Isolate ngay lập tức
+    if (_isolate != null) {
+      _isolate!.kill(priority: Isolate.immediate);
+      _isolate = null;
+    }
+  }
+
   Future<Map<String, dynamic>?> processDualTaskInIsolate({
+    required int sessionHandle,
     required int address,
     required int width,
     required int height,
@@ -90,31 +205,32 @@ class FaceIsolateService extends GetxService {
 
     final landmarksData = _extractLandmarks(face);
 
-    // AppLog.info("Địa chỉ YUV gửi sang Isolate: $address");
-    _sendPort.send([
-      reqId, // 0
-      address, // 1
-      width, // 2
-      height, // 3
-      yStride, // 4
-      landmarksData, // 5
-      rectX, // 6
-      rectY, // 7
-      rectW, // 8
-      rectH, // 9
-      rotation, // 10
-      0, // 11: type = 0: Dual Task
-      spoofSize, // 12
-      recognitionThreshold, // 13:
-      spoofThreshold, // 14
-      qualityThreshold, // 15
-    ]);
+    final request = DualTaskRequest(
+      reqId: reqId,
+      sessionHandle: sessionHandle,
+      address: address,
+      width: width,
+      height: height,
+      yStride: yStride,
+      landmarks: landmarksData!,
+      rectX: rectX,
+      rectY: rectY,
+      rectW: rectW,
+      rectH: rectH,
+      rotation: rotation,
+      recognitionThreshold: recognitionThreshold,
+      spoofThreshold: spoofThreshold,
+      qualityThreshold: qualityThreshold,
+    );
+
+    _sendPort.send(request);
 
     final result = await completer.future;
     return result as Map<String, dynamic>?;
   }
 
   Future<RegistrationResult?> processRegistrationInIsolate({
+    required int sessionHandle,
     required int address,
     required int width,
     required int height,
@@ -130,21 +246,18 @@ class FaceIsolateService extends GetxService {
 
     final landmarksData = _extractLandmarks(face);
 
-    _sendPort.send([
-      reqId, // 0
-      address, // 1
-      width, // 2
-      height, // 3
-      0, // 4: yStride (Không dùng)
-      landmarksData, // 5
-      0, 0, 0, 0, // 6, 7, 8, 9: rect (Không dùng)
-      rotation, // 10
-      1, // 11: taskType = 1 (Registration)
-      recogPixelSize, // 12: 👉 Đặt ở vị trí 12
-      0.0, // 13: Padding cho bằng DualTask
-      0.0, // 14: Padding
-      0.0, // 15: Padding
-    ]);
+    final request = RegistrationTaskRequest(
+      reqId: reqId,
+      sessionHandle: sessionHandle,
+      address: address,
+      width: width,
+      height: height,
+      landmarks: landmarksData!,
+      rotation: rotation,
+      recogPixelSize: recogPixelSize,
+    );
+
+    _sendPort.send(request);
 
     final result = await completer.future;
     return result as RegistrationResult?;
@@ -152,6 +265,7 @@ class FaceIsolateService extends GetxService {
 
   // --- THÊM HÀM GỌI TỪ LUỒNG CHÍNH ---
   Future<double> processQualityInIsolate({
+    required int sessionHandle,
     required int address,
     required int width,
     required int height,
@@ -167,43 +281,51 @@ class FaceIsolateService extends GetxService {
     // Lấy bounding box
     final rect = face.boundingBox;
 
-    _sendPort.send([
-      reqId,
-      address, width, height, 0,
-      <double>[], // landmarks (không cần)
-      rect.left.toInt(),
-      rect.top.toInt(),
-      rect.width.toInt(),
-      rect.height.toInt(),
-      rotation,
-      2, // 👈 type = 2: TÁC VỤ QUALITY CHECK
-      0, 0.0,
-    ]);
+    final request = QualityCheckTaskRequest(
+      sessionHandle: sessionHandle,
+      reqId: reqId,
+      address: address,
+      width: width,
+      height: height,
+      rectX: rect.left.toInt(),
+      rectY: rect.top.toInt(),
+      rectW: rect.width.toInt(),
+      rectH: rect.height.toInt(),
+      rotation: rotation,
+    );
+
+    _sendPort.send(request);
 
     final result = await completer.future;
     return (result as num?)?.toDouble() ?? -1.0;
   }
 
-  // Hủy Isolate khi thoát app
-  void reset() {
-    // _isReady = false;
+  Future<Uint8List?> encodeJpegInIsolate({
+    required int sessionHandle,
+    required int address,
+    required int width,
+    required int height,
+    required int rotation,
+  }) async {
+    if (!_isReady) return null;
 
-    // A. Giải phóng các luồng đang chờ (Chống treo app)
-    _pendingRequests.forEach((id, completer) {
-      if (!completer.isCompleted) {
-        completer.completeError("Camera closed");
-      }
-    });
-    _pendingRequests.clear();
+    final completer = Completer<dynamic>();
+    int reqId = _nextRequestId++;
+    _pendingRequests[reqId] = completer;
 
-    // // B. Đóng các cổng giao tiếp (Chống rò rỉ bộ nhớ)
-    // _receivePort?.close();
-    // _responseStream.close();
+    final request = EncodeJpegRequest(
+      reqId: reqId,
+      sessionHandle: sessionHandle,
+      address: address,
+      width: width,
+      height: height,
+      rotation: rotation,
+    );
 
-    // // C. Tiêu diệt Isolate ngay lập tức
-    // _isolate.kill(priority: Isolate.immediate);
+    _sendPort.send(request);
 
-    AppLog.info("✅ Isolate Worker đã được đưa về trạng thái chờ (Idle)!");
+    final result = await completer.future;
+    return result as Uint8List?;
   }
 
   // ----------------------------------------------------------------
@@ -217,89 +339,66 @@ class FaceIsolateService extends GetxService {
     FaceImagePipelineNative.init();
 
     port.listen((message) {
-      if (message is! List) return;
-
-      int reqId = message[0]; // Nhận ID
+      if (message is! IsolateTask) return;
 
       try {
-        final int address = message[1];
-        final int width = message[2];
-        final int height = message[3];
-        final int yStride = message[4];
-        final List<double> landmarks = message[5]; // Nhận list landmarks
-        final int rectX = message[6];
-        final int rectY = message[7];
-        final int rectW = message[8];
-        final int rectH = message[9];
-        final int rotation = message[10];
-        final int taskType = message[11]; // 0 = Dual Task, 1 = Registration
-
-        final Pointer<Uint8> ptrYuv = Pointer<Uint8>.fromAddress(address);
-
-        if (taskType == 0) {
-          final double recognitionThreshold = message[13];
-          final double spoofThreshold = message[14];
-          final double qualityThreshold = message[15];
-
+        if (message is DualTaskRequest) {
           final result = FaceImagePipelineNative.processDualTask(
-            ptrYuv: ptrYuv,
-            width: width,
-            height: height,
-            yStride: yStride,
-            landmarks: landmarks,
-            rotation: rotation,
-            rectX: rectX,
-            rectY: rectY,
-            rectW: rectW,
-            rectH: rectH,
-            recognitionThreshold: recognitionThreshold,
-            spoofThreshold: spoofThreshold,
-            qualityThreshold: qualityThreshold,
+            sessionHandle: message.sessionHandle,
+            ptrYuv: Pointer<Uint8>.fromAddress(message.address),
+            width: message.width,
+            height: message.height,
+            yStride: message.yStride,
+            landmarks: message.landmarks,
+            rotation: message.rotation,
+            rectX: message.rectX,
+            rectY: message.rectY,
+            rectW: message.rectW,
+            rectH: message.rectH,
+            recognitionThreshold: message.recognitionThreshold,
+            spoofThreshold: message.spoofThreshold,
+            qualityThreshold: message.qualityThreshold,
           );
-
           // Trả về: [ID, Dữ liệu]
-          mainSendPort.send([reqId, result]);
-        } else if (taskType == 1) {
-          // ----------------------------------------------------
-          // TYPE 1: ĐĂNG KÝ KHOÉT ẢNH VÀ TẠO JPG
-          // ----------------------------------------------------
-          final int recogPixelSize = message[12];
-
+          mainSendPort.send([message.reqId, result]);
+        } else if (message is RegistrationTaskRequest) {
           final RegistrationResult? result =
               FaceImagePipelineNative.processRegistration(
-                ptrYuv: ptrYuv, // Đã có sẵn từ address
-                width: width, // Đã nhận từ message
-                height: height, // Đã nhận từ message
-                landmarks: landmarks, // Đã nhận từ message
-                rotation: rotation, // Đã nhận từ message
-                recogPixelSize: recogPixelSize,
+                sessionHandle: message.sessionHandle,
+                ptrYuv: Pointer<Uint8>.fromAddress(message.address),
+                width: message.width,
+                height: message.height,
+                landmarks: message.landmarks,
+                rotation: message.rotation,
+                recogPixelSize: message.recogPixelSize,
               );
-
-          if (result == null) {
-            mainSendPort.send([reqId, null]);
-            return;
-          }
-
-          mainSendPort.send([reqId, result]);
-        } else if (taskType == 2) {
-          // ----------------------------------------------------
-          // TYPE 2: CHECK QUALITY (LIGHTQNET)
-          // ----------------------------------------------------
+          mainSendPort.send([message.reqId, result]);
+        } else if (message is QualityCheckTaskRequest) {
           final double score = FaceImagePipelineNative.processQuality(
-            ptrYuv: ptrYuv,
-            width: message[2],
-            height: message[3],
-            rotation: message[10],
-            rectX: message[6],
-            rectY: message[7],
-            rectW: message[8],
-            rectH: message[9],
+            sessionHandle: message.sessionHandle,
+            ptrYuv: Pointer<Uint8>.fromAddress(message.address),
+            width: message.width,
+            height: message.height,
+            rotation: message.rotation,
+            rectX: message.rectX,
+            rectY: message.rectY,
+            rectW: message.rectW,
+            rectH: message.rectH,
           );
-          mainSendPort.send([reqId, score]);
+          mainSendPort.send([message.reqId, score]);
+        } else if (message is EncodeJpegRequest) {
+          final result = FaceImagePipelineNative.encodeYuvToJpeg(
+            sessionHandle: message.sessionHandle,
+            ptrYuv: Pointer<Uint8>.fromAddress(message.address),
+            width: message.width,
+            height: message.height,
+            rotation: message.rotation,
+          );
+          mainSendPort.send([message.reqId, result]);
         }
       } catch (e) {
         AppLog.error("Worker Error: $e");
-        mainSendPort.send([reqId, null]);
+        mainSendPort.send([message.reqId, null]);
       }
     });
   }

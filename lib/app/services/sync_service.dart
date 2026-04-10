@@ -151,7 +151,7 @@ class SyncService {
   }
 
   void init() {
-    AppLog.info("⚙️ Khởi động hệ thống Đồng bộ ngầm (SyncService)...");
+    // AppLog.info("⚙️ Khởi động hệ thống Đồng bộ ngầm (SyncService)...");
 
     pullUsersFromServer();
 
@@ -160,9 +160,9 @@ class SyncService {
       results,
     ) {
       if (!results.contains(ConnectivityResult.none)) {
-        AppLog.info(
-          "🌐 [MẠNG]: Đã có kết nối Internet! Kích hoạt vét máng Hive...",
-        );
+        // AppLog.info(
+        //   "🌐 [MẠNG]: Đã có kết nối Internet! Kích hoạt vét máng Hive...",
+        // );
         syncPendingRecords();
 
         // Tiện tay nối lại luôn cái WebSocket nếu nó đang đứt
@@ -259,7 +259,7 @@ class SyncService {
   Future<void> pullUsersFromServer() async {
     if (_isPulling) return;
     _isPulling = true;
-    AppLog.info("⬇️ Bắt đầu tiến trình KÉO dữ liệu từ Server...");
+    // AppLog.info("⬇️ Bắt đầu tiến trình KÉO dữ liệu từ Server...");
 
     try {
       final settingsBox = Hive.box('SettingsBox');

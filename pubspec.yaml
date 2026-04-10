@@ -86,7 +86,7 @@ flutter:
     # - assets/models/MobileFaceNet_testing_2.tflite
     # - assets/models/w600k_mbf_float32.tflite
     # - assets/models/output_model_test.tflite
-    - assets/dataset_test.zip
+    # - assets/dataset_test.zip
     # - assets/db_mobilefacenet_tflite.json
     # - assets/sounds/universfield-new-notification-07-210334.mp3
     - assets/sounds/miraclei-sample_confirm_accept01_kofi_by_miraclei-364181.mp3

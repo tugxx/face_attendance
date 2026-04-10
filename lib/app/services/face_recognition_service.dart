@@ -1,13 +1,8 @@
-import 'dart:math';
-import 'dart:convert';
-
-import 'package:uuid/uuid.dart';
+// import 'dart:math';
+// import 'dart:convert';
 import 'package:get/get.dart';
 import 'package:hive_flutter/hive_flutter.dart';
-import 'package:flutter/services.dart';
-
-import '../services/log_service.dart';
-import '../services/native_ai_service.dart';
+// import 'package:flutter/services.dart';
 
 class FaceRecognitionService extends GetxService {
   // --- SINGLETON PATTERN --- (Chỉ tạo 1 instance duy nhất trong app)
@@ -17,19 +12,19 @@ class FaceRecognitionService extends GetxService {
   FaceRecognitionService._internal();
 
   // --- CẤU HÌNH ---
-  static const String _modelPath = 'assets/models/mobilefacenet.tflite';
-  String get modelName => _modelPath.split('/').last.replaceAll('.tflite', '');
+  static const String modelPath = 'assets/models/mobilefacenet.tflite';
+  String get modelName => modelPath.split('/').last.replaceAll('.tflite', '');
 
-  static const String _dbPath = 'assets/db_mobilefacenet_tflite.json';
+  // static const String _dbPath = 'assets/db_mobilefacenet_tflite.json';
   static const double _threshold = 0.60;
 
   // --- STATE ---;
   late Box _hiveBox;
 
-  final int _outputSize = 192;
+  static int outputSize = 192;
 
-  int _inputWidth = 112;
-  int _inputHeight = 112;
+  final int _inputWidth = 112;
+  final int _inputHeight = 112;
 
   int get inputWidth => _inputWidth;
   int get inputHeight => _inputHeight;
@@ -39,249 +34,243 @@ class FaceRecognitionService extends GetxService {
 
   int get recogPixelSize => _inputWidth * _inputHeight * 3;
 
-  /// Khởi tạo Service
-  Future<void> initialize() async {
-    try {
-      AppLog.info("🚀 Bắt đầu khởi tạo FaceRecognitionService...");
+  // /// Khởi tạo Service
+  // Future<void> initialize() async {
+  //   try {
+  //     final encodedDims = await NativeAiService().initFaceModel(modelPath);
 
-      final encodedDims = await NativeAiService().initFaceModel(_modelPath);
+  //     if (encodedDims <= 0) {
+  //       AppLog.error("❌ FATAL: Không thể nạp Face Model vào C++!");
+  //       return;
+  //     }
 
-      if (encodedDims <= 0) {
-        AppLog.error("❌ FATAL: Không thể nạp Face Model vào C++!");
-        return;
-      }
+  //     _inputWidth = encodedDims >> 16;
+  //     _inputHeight = encodedDims & 0xFFFF;
 
-      _inputWidth = encodedDims >> 16;
-      _inputHeight = encodedDims & 0xFFFF;
+  //     AppLog.info(
+  //       "🛡️ Face Model Auto Configured: ${_inputWidth}x$_inputHeight (RAM: $recogPixelSize bytes)",
+  //     );
 
-      AppLog.info(
-        "🛡️ Face Model Auto Configured: ${_inputWidth}x$_inputHeight (RAM: $recogPixelSize bytes)",
-      );
+  //     _hiveBox = Hive.box('face_db');
 
-      _hiveBox = Hive.box('face_db');
+  //     await syncDatabase();
+  //   } catch (e) {
+  //     AppLog.error("❌ Lỗi Fatal Initialize: $e");
+  //   }
+  // }
 
-      await syncDatabase();
+  // /// Đồng bộ dữ liệu: Hive (Disk) + JSON (Assets) -> RAM
+  // Future<void> syncDatabase() async {
+  //   NativeAiService().clearNativeDatabase(); // Xóa sạch dữ liệu cũ trong C++
 
-      AppLog.info(
-        "✅ FaceRecognitionService sẵn sàng! (Model: $_outputSize dim)",
-      );
-    } catch (e) {
-      AppLog.error("❌ Lỗi Fatal Initialize: $e");
-    }
-  }
+  //   // TRƯỜNG HỢP 1: Đã có dữ liệu trong Hive (Từ lần chạy thứ 2 trở đi)
+  //   if (_hiveBox.isNotEmpty) {
+  //     AppLog.info("📂 Đang sử dụng dữ liệu từ Hive (Disk)...");
 
-  /// Đồng bộ dữ liệu: Hive (Disk) + JSON (Assets) -> RAM
-  Future<void> syncDatabase() async {
-    NativeAiService().clearNativeDatabase(); // Xóa sạch dữ liệu cũ trong C++
+  //     int conflictCount = 0;
+  //     int successCount = 0;
+  //     for (var key in _hiveBox.keys) {
+  //       // Ép kiểu dynamic về List<double> an toàn
+  //       final rawData = _hiveBox.get(key);
+  //       if (rawData is Map) {
+  //         final mapData = Map<String, dynamic>.from(rawData);
+  //         final String templateId =
+  //             mapData['template_id']?.toString() ?? "unknown_id";
+  //         final List<dynamic> rawVector = mapData['vector'] ?? [];
 
-    // TRƯỜNG HỢP 1: Đã có dữ liệu trong Hive (Từ lần chạy thứ 2 trở đi)
-    if (_hiveBox.isNotEmpty) {
-      AppLog.info("📂 Đang sử dụng dữ liệu từ Hive (Disk)...");
+  //         List<double> vector = List<double>.from(rawVector);
 
-      int conflictCount = 0;
-      int successCount = 0;
-      for (var key in _hiveBox.keys) {
-        // Ép kiểu dynamic về List<double> an toàn
-        final rawData = _hiveBox.get(key);
-        if (rawData is Map) {
-          final mapData = Map<String, dynamic>.from(rawData);
-          final String templateId =
-              mapData['template_id']?.toString() ?? "unknown_id";
-          final List<dynamic> rawVector = mapData['vector'] ?? [];
+  //         if (vector.length == outputSize) {
+  //           NativeAiService().addFaceToNative(
+  //             key.toString(),
+  //             vector,
+  //             templateId,
+  //           );
+  //           successCount++;
+  //         } else {
+  //           conflictCount++;
+  //         }
+  //       }
+  //     }
+  //     AppLog.info("📂 Đã load $successCount khuôn mặt từ Hive.");
+  //     if (conflictCount > 0) {
+  //       AppLog.warning(
+  //         "⚠️ CẢNH BÁO: Bỏ qua $conflictCount khuôn mặt do sai kích thước vector (Cần xóa DB cũ hoặc dùng đúng model).",
+  //       );
+  //     }
+  //     return;
+  //   }
 
-          List<double> vector = List<double>.from(rawVector);
+  //   // TRƯỜNG HỢP 2: Hive chưa có gì (Lần chạy đầu tiên) -> Đọc JSON"
+  //   AppLog.info(
+  //     "✨ Lần chạy đầu tiên (Hive rỗng). Bắt đầu khởi tạo dữ liệu từ JSON...",
+  //   );
+  //   try {
+  //     final String jsonString = await rootBundle.loadString(_dbPath);
+  //     if (jsonString.isEmpty) {
+  //       AppLog.warning("⚠️ File JSON rỗng, không có dữ liệu mẫu.");
+  //       return;
+  //     }
 
-          if (vector.length == _outputSize) {
-            NativeAiService().addFaceToNative(
-              key.toString(),
-              vector,
-              templateId,
-            );
-            successCount++;
-          } else {
-            conflictCount++;
-          }
-        }
-      }
-      AppLog.info("📂 Đã load $successCount khuôn mặt từ Hive.");
-      if (conflictCount > 0) {
-        AppLog.warning(
-          "⚠️ CẢNH BÁO: Bỏ qua $conflictCount khuôn mặt do sai kích thước vector (Cần xóa DB cũ hoặc dùng đúng model).",
-        );
-      }
-      return;
-    }
+  //     final Map<String, dynamic> jsonData = json.decode(jsonString);
+  //     int count = 0;
 
-    // TRƯỜNG HỢP 2: Hive chưa có gì (Lần chạy đầu tiên) -> Đọc JSON"
-    AppLog.info(
-      "✨ Lần chạy đầu tiên (Hive rỗng). Bắt đầu khởi tạo dữ liệu từ JSON...",
-    );
-    try {
-      final String jsonString = await rootBundle.loadString(_dbPath);
-      if (jsonString.isEmpty) {
-        AppLog.warning("⚠️ File JSON rỗng, không có dữ liệu mẫu.");
-        return;
-      }
+  //     jsonData.forEach((key, value) {
+  //       if (value is Map<String, dynamic>) {
+  //         final String templateId =
+  //             value['template_id']?.toString() ?? "json_id_$key";
 
-      final Map<String, dynamic> jsonData = json.decode(jsonString);
-      int count = 0;
+  //         // Chỉ update nếu Hive chưa có hoặc muốn ghi đè (ở đây mình chọn ghi đè để JSON là nhất)
+  //         final embedding = List<double>.from(value['vector'] ?? []);
 
-      jsonData.forEach((key, value) {
-        if (value is Map<String, dynamic>) {
-          final String templateId =
-              value['template_id']?.toString() ?? "json_id_$key";
+  //         if (embedding.length == outputSize) {
+  //           _hiveBox.put(key, value);
+  //           NativeAiService().addFaceToNative(key, embedding, templateId);
+  //           count++;
+  //         }
+  //       }
+  //     });
 
-          // Chỉ update nếu Hive chưa có hoặc muốn ghi đè (ở đây mình chọn ghi đè để JSON là nhất)
-          final embedding = List<double>.from(value['vector'] ?? []);
+  //     AppLog.info("🔄 Đã nạp $count khuôn mặt.");
+  //   } catch (e) {
+  //     AppLog.error("⚠️ Lỗi load JSON: $e");
+  //   }
+  // }
 
-          if (embedding.length == _outputSize) {
-            _hiveBox.put(key, value);
-            NativeAiService().addFaceToNative(key, embedding, templateId);
-            count++;
-          }
-        }
-      });
+  // Future<RecognitionResult> predict(List<double> inputTensor) async {
+  //   // 1. Guard Clause (Bảo vệ)
+  //   if (isDatabaseEmpty) {
+  //     return RecognitionResult("Error", 0.0, true, "", "Unknown", 0.0);
+  //   }
 
-      AppLog.info("🔄 Đã nạp $count khuôn mặt.");
-    } catch (e) {
-      AppLog.error("⚠️ Lỗi load JSON: $e");
-    }
-  }
+  //   try {
+  //     // 2. Khoán trắng mọi việc cho C++ xử lý và nhận kết quả cuối cùng
+  //     // AppLog.info("🔍 Đang dự đoán khuôn mặt với C++...");
+  //     return NativeAiService().predictFace(inputTensor, threshold);
+  //   } catch (e) {
+  //     AppLog.error("❌ Lỗi khi predict: $e");
+  //     return RecognitionResult("Error", 0.0, true, "", "Unknown", 0.0);
+  //   }
+  // }
 
-  Future<RecognitionResult> predict(List<double> inputTensor) async {
-    // 1. Guard Clause (Bảo vệ)
-    if (isDatabaseEmpty) {
-      return RecognitionResult("Error", 0.0, true, "", "Unknown", 0.0);
-    }
+  // // Hàm L2 Normalize chuyển từ Java sang Dart
+  // List<double> _l2Normalize(List<double> embedding) {
+  //   double squareSum = 0;
+  //   for (var x in embedding) {
+  //     squareSum += x * x;
+  //   }
 
-    try {
-      // 2. Khoán trắng mọi việc cho C++ xử lý và nhận kết quả cuối cùng
-      // AppLog.info("🔍 Đang dự đoán khuôn mặt với C++...");
-      return NativeAiService().predictFace(inputTensor, threshold);
-    } catch (e) {
-      AppLog.error("❌ Lỗi khi predict: $e");
-      return RecognitionResult("Error", 0.0, true, "", "Unknown", 0.0);
-    }
-  }
+  //   // epsilon = 1e-10 để tránh chia cho 0
+  //   double xInvNorm = sqrt(max(squareSum, 1e-10));
 
-  // Hàm L2 Normalize chuyển từ Java sang Dart
-  List<double> _l2Normalize(List<double> embedding) {
-    double squareSum = 0;
-    for (var x in embedding) {
-      squareSum += x * x;
-    }
+  //   return embedding.map((x) => x / xInvNorm).toList();
+  // }
 
-    // epsilon = 1e-10 để tránh chia cho 0
-    double xInvNorm = sqrt(max(squareSum, 1e-10));
+  // Future<bool> register(String name, List<double> inputTensor) async {
+  //   if (inputTensor.isEmpty) {
+  //     AppLog.warning("⚠️ Lỗi: Dữ liệu đầu vào rỗng, không thể đăng ký.");
+  //     return false;
+  //   }
 
-    return embedding.map((x) => x / xInvNorm).toList();
-  }
+  //   try {
+  //     // 1. Gọi thẳng xuống C++ để lấy vector đặc trưng
+  //     List<double>? embedding = NativeAiService().getEmbeddingFromC(
+  //       inputTensor,
+  //     );
 
-  Future<bool> register(String name, List<double> inputTensor) async {
-    if (inputTensor.isEmpty) {
-      AppLog.warning("⚠️ Lỗi: Dữ liệu đầu vào rỗng, không thể đăng ký.");
-      return false;
-    }
+  //     // Vì getEmbeddingFromC trả về List<double>? (nullable), ta check null
+  //     if (embedding == null || embedding.length != outputSize) {
+  //       // AppLog.warning("⚠️ Lỗi: AI không tạo được vector hợp lệ. Hủy đăng ký.");
+  //       return false;
+  //     }
 
-    try {
-      // 1. Gọi thẳng xuống C++ để lấy vector đặc trưng
-      List<double>? embedding = NativeAiService().getEmbeddingFromC(
-        inputTensor,
-      );
+  //     final String newTemplateId = const Uuid().v4();
 
-      // Vì getEmbeddingFromC trả về List<double>? (nullable), ta check null
-      if (embedding == null || embedding.length != _outputSize) {
-        // AppLog.warning("⚠️ Lỗi: AI không tạo được vector hợp lệ. Hủy đăng ký.");
-        return false;
-      }
+  //     // 3. ĐẨY XUỐNG RAM CỦA C++ (Cực kỳ quan trọng để Predict nhận ra người này)
+  //     NativeAiService().addFaceToNative(name, embedding, newTemplateId);
 
-      final String newTemplateId = const Uuid().v4();
+  //     // 4. Lưu vào ổ cứng (Hive)
+  //     await _hiveBox.put(name, {
+  //       'template_id': newTemplateId,
+  //       'vector': embedding,
+  //     });
 
-      // 3. ĐẨY XUỐNG RAM CỦA C++ (Cực kỳ quan trọng để Predict nhận ra người này)
-      NativeAiService().addFaceToNative(name, embedding, newTemplateId);
+  //     AppLog.info(
+  //       "✅ Đã đăng ký thành công: $name (Vector size: ${embedding.length})",
+  //     );
+  //     return true;
+  //   } catch (e) {
+  //     AppLog.error("❌ Lỗi đăng ký: $e");
+  //     return false;
+  //   }
+  // }
 
-      // 4. Lưu vào ổ cứng (Hive)
-      await _hiveBox.put(name, {
-        'template_id': newTemplateId,
-        'vector': embedding,
-      });
+  // Future<bool> update(String name, List<double> inputTensor) async {
+  //   if (inputTensor.isEmpty) return false;
 
-      AppLog.info(
-        "✅ Đã đăng ký thành công: $name (Vector size: ${embedding.length})",
-      );
-      return true;
-    } catch (e) {
-      AppLog.error("❌ Lỗi đăng ký: $e");
-      return false;
-    }
-  }
+  //   try {
+  //     // 1. Lấy Embedding MỚI từ ảnh input qua C++
+  //     List<double>? newEmbedding = NativeAiService().getEmbeddingFromC(
+  //       inputTensor,
+  //     );
 
-  Future<bool> update(String name, List<double> inputTensor) async {
-    if (inputTensor.isEmpty) return false;
+  //     if (newEmbedding == null || newEmbedding.length != outputSize) {
+  //       AppLog.warning(
+  //         "⚠️ Lỗi update: AI trả về vector rỗng hoặc sai kích thước.",
+  //       );
+  //       return false;
+  //     }
 
-    try {
-      // 1. Lấy Embedding MỚI từ ảnh input qua C++
-      List<double>? newEmbedding = NativeAiService().getEmbeddingFromC(
-        inputTensor,
-      );
+  //     // 2. Lấy Embedding CŨ từ Database (RAM Dart)
+  //     List<double>? oldEmbedding;
+  //     String currentTemplateId = const Uuid().v4();
 
-      if (newEmbedding == null || newEmbedding.length != _outputSize) {
-        AppLog.warning(
-          "⚠️ Lỗi update: AI trả về vector rỗng hoặc sai kích thước.",
-        );
-        return false;
-      }
+  //     final rawData = _hiveBox.get(name);
 
-      // 2. Lấy Embedding CŨ từ Database (RAM Dart)
-      List<double>? oldEmbedding;
-      String currentTemplateId = const Uuid().v4();
+  //     if (rawData is Map) {
+  //       currentTemplateId =
+  //           rawData['template_id']?.toString() ?? currentTemplateId;
+  //       if (rawData['vector'] != null) {
+  //         oldEmbedding = (rawData['vector'] as List)
+  //             .map((e) => double.parse(e.toString()))
+  //             .toList();
+  //       }
+  //     } else if (rawData is List) {
+  //       // Đề phòng còn dính data cũ
+  //       oldEmbedding = List<double>.from(rawData);
+  //     }
 
-      final rawData = _hiveBox.get(name);
+  //     if (oldEmbedding == null || oldEmbedding.length != newEmbedding.length) {
+  //       return register(name, inputTensor);
+  //     }
 
-      if (rawData is Map) {
-        currentTemplateId =
-            rawData['template_id']?.toString() ?? currentTemplateId;
-        if (rawData['vector'] != null) {
-          oldEmbedding = (rawData['vector'] as List)
-              .map((e) => double.parse(e.toString()))
-              .toList();
-        }
-      } else if (rawData is List) {
-        // Đề phòng còn dính data cũ
-        oldEmbedding = List<double>.from(rawData);
-      }
+  //     // 3. THUẬT TOÁN MERGE (Trung bình cộng) trên Dart
+  //     List<double> mergedEmbedding = List.generate(oldEmbedding.length, (
+  //       index,
+  //     ) {
+  //       return oldEmbedding![index] + newEmbedding[index];
+  //     });
 
-      if (oldEmbedding == null || oldEmbedding.length != newEmbedding.length) {
-        return register(name, inputTensor);
-      }
+  //     // 4. Chuẩn hóa lại L2 (Dùng hàm Dart ở bên dưới)
+  //     mergedEmbedding = _l2Normalize(mergedEmbedding);
 
-      // 3. THUẬT TOÁN MERGE (Trung bình cộng) trên Dart
-      List<double> mergedEmbedding = List.generate(oldEmbedding.length, (
-        index,
-      ) {
-        return oldEmbedding![index] + newEmbedding[index];
-      });
+  //     // 5. LƯU LẠI Ở CẢ 3 NƠI
+  //     NativeAiService().addFaceToNative(
+  //       name,
+  //       mergedEmbedding,
+  //       currentTemplateId,
+  //     ); // Update C++
 
-      // 4. Chuẩn hóa lại L2 (Dùng hàm Dart ở bên dưới)
-      mergedEmbedding = _l2Normalize(mergedEmbedding);
+  //     await _hiveBox.put(name, {
+  //       'template_id': currentTemplateId,
+  //       'vector': mergedEmbedding,
+  //     });
 
-      // 5. LƯU LẠI Ở CẢ 3 NƠI
-      NativeAiService().addFaceToNative(
-        name,
-        mergedEmbedding,
-        currentTemplateId,
-      ); // Update C++
-
-      await _hiveBox.put(name, {
-        'template_id': currentTemplateId,
-        'vector': mergedEmbedding,
-      });
-
-      AppLog.info("♻️ Đã cập nhật vector cho: $name");
-      return true;
-    } catch (e) {
-      AppLog.error("❌ Lỗi update: $e");
-      return false;
-    }
-  }
+  //     AppLog.info("♻️ Đã cập nhật vector cho: $name");
+  //     return true;
+  //   } catch (e) {
+  //     AppLog.error("❌ Lỗi update: $e");
+  //     return false;
+  //   }
+  // }
 }

@@ -5,15 +5,6 @@
 #include "face_recognizer.h"
 #include "native_face_align.h"
 
-FaceRecognizer *FaceRecognizer::instance = nullptr;
-
-FaceRecognizer *FaceRecognizer::GetInstance() {
-  if (instance == nullptr) {
-    instance = new FaceRecognizer();
-  }
-  return instance;
-}
-
 int FaceRecognizer::InitFaceModel(const void *faceData, int faceSize) {
   if (faceData == nullptr)
     return -1;
@@ -48,6 +39,22 @@ int FaceRecognizer::InitFaceModel(const void *faceData, int faceSize) {
       TfLiteInterpreterGetInputTensor(faceInterpreter, 0);
   this->inputHeight = TfLiteTensorDim(inputTensor, 1);
   this->inputWidth = TfLiteTensorDim(inputTensor, 2);
+  this->recogSize = this->inputWidth * this->inputHeight * 3;
+
+  this->tfliteInputData = (float *)TfLiteTensorData(inputTensor);
+  this->tfliteOutputData = (float *)TfLiteTensorData(outputTensor);
+
+  // Tránh rò rỉ RAM nếu hàm Init vô tình bị gọi lại 2 lần
+  if (this->sharedBuffer != nullptr) {
+    free(this->sharedBuffer);
+  }
+
+  this->sharedBuffer = (float *)malloc(this->recogSize * sizeof(float));
+
+  if (!this->sharedBuffer) {
+    LOG_ERROR("❌ Lỗi: Không đủ RAM để cấp phát Shared Buffer!");
+    return -1;
+  }
 
   return (this->inputWidth << 16) | this->inputHeight;
 }
@@ -84,22 +91,15 @@ bool FaceRecognizer::ExtractFaceFeature(const float *inputPixels,
     return false;
   }
 
-  // Lấy Input Tensor để kiểm tra kích thước
-  TfLiteTensor *inputTensor =
-      TfLiteInterpreterGetInputTensor(faceInterpreter, 0);
-  int expectedSize = TfLiteTensorByteSize(inputTensor) / sizeof(float);
-
-  if (pixelsCount != expectedSize) {
+  if (pixelsCount != this->recogSize) {
     LOG_ERROR(
         "🛑 LỖI INPUT MODEL: Nhận được %d, nhưng Model cần %d",
-        pixelsCount, expectedSize);
+        pixelsCount, this->recogSize);
     return false;
   }
 
   // 2. Đưa dữ liệu vào Model (Thay cho bước Reshape ở Dart)
-  // memcpy copy toàn bộ mảng trong nháy mắt
-  float *inputData = (float *)TfLiteTensorData(inputTensor);
-  memcpy(inputData, inputPixels, pixelsCount * sizeof(float));
+  memcpy(this->tfliteInputData, inputPixels, pixelsCount * sizeof(float));
 
   // 3. Run Inference (Chạy AI)
   if (TfLiteInterpreterInvoke(faceInterpreter) != kTfLiteOk) {
@@ -107,21 +107,10 @@ bool FaceRecognizer::ExtractFaceFeature(const float *inputPixels,
     return false;
   }
 
-  // 4. Lấy kết quả ra (Thay cho bước Flatten ở Dart)
-  const TfLiteTensor *outputTensor =
-      TfLiteInterpreterGetOutputTensor(faceInterpreter, 0);
-  float *outputData = (float *)TfLiteTensorData(outputTensor);
-  int outputSize = TfLiteTensorByteSize(outputTensor) / sizeof(float);
-
-  if (outputSize != this->featureSize) {
-    LOG_ERROR("❌ Lỗi: Size output thay đổi bất thường!");
-    return false;
-  }
-
-  memcpy(outFeature, outputData, outputSize * sizeof(float));
+  memcpy(outFeature, this->tfliteOutputData, this->featureSize * sizeof(float));
 
   // 5. L2 Normalize (Bắt buộc)
-  L2Normalize(outFeature, outputSize);
+  L2Normalize(outFeature, this->featureSize);
 
   return true;
 }
@@ -141,20 +130,21 @@ RecognitionResult FaceRecognizer::PredictFaceFromYuv(
     int rotation, int rectX, int rectY, int rectW, int rectH, float threshold) {
   RecognitionResult result = {"Unknown", -1.0f, true, "", "Unknown", -1.0f};
 
-  if (faceInterpreter == nullptr)
-    return result;
-
-  int recogSize = this->inputWidth * this->inputHeight * 3;
-  float *recogBuffer = (float *)malloc(recogSize * sizeof(float));
-  if (!recogBuffer)
+  if (faceInterpreter == nullptr || this->sharedBuffer == nullptr)
     return result;
 
   // 2. Tự Affine Transform
-  process_face_affine((uint8_t *)yuvData, imgW, imgH, (float *)landmarks,
-                      rotation, recogBuffer);
+  bool alignSuccess = process_face_affine(
+      (uint8_t *)yuvData, imgW, imgH, (float *)landmarks, rotation,
+      this->inputWidth, this->inputHeight, this->sharedBuffer);
 
-  result = this->PredictFaceFromPixels(recogBuffer, recogSize, threshold);
-  free(recogBuffer);
+  if (!alignSuccess) {
+    LOG_ERROR("Căn chỉnh khuôn mặt thất bại (PredictFaceFromYuv)");
+    return result;
+  }
+
+  result = this->PredictFaceFromPixels(this->sharedBuffer, this->recogSize,
+                                       threshold);
 
   return result;
 }
@@ -241,5 +231,12 @@ void FaceRecognizer::MergeAndNormalize(const float *v1, const float *v2,
   // 3. Nhân chuẩn hóa và ghi đè thẳng vào kết quả đầu ra
   for (int i = 0; i < size; ++i) {
     outVec[i] *= invNorm;
+  }
+}
+
+void FaceRecognizer::Release() {
+  if (this->sharedBuffer != nullptr) {
+    free(this->sharedBuffer);
+    this->sharedBuffer = nullptr;
   }
 }

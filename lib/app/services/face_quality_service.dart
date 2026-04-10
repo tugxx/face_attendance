@@ -3,16 +3,34 @@ import '../services/log_service.dart';
 
 class FaceQualityAssessor {
   bool isReady = false;
-  final String _modelPath = 'assets/models/lightqnet_mobile.tflite';
-  String get modelName => _modelPath.split('/').last.replaceAll('.tflite', '');
+  static final String modelPath = 'assets/models/lightqnet_mobile.tflite';
+  String get modelName => modelPath.split('/').last.replaceAll('.tflite', '');
 
-  static const double _threshold = 0.37;
+  static const double _threshold = 0.4;
   double get threshold => _threshold;
+
+  int _inputWidth = 96;
+  int _inputHeight = 96;
 
   /// Khởi tạo model từ thư mục assets bằng cách gọi C++
   Future<void> initialize() async {
     try {
-      isReady = await NativeAiService().initQualityModel(_modelPath);
+      final encodedDims = await NativeAiService().initQualityModel(modelPath);
+      if (encodedDims <= 0) {
+        AppLog.error("❌ FATAL: C++ nạp Quality Model thất bại!");
+        isReady = false; // Nhớ đổi _isReady thành biến tương ứng của bạn
+        return;
+      }
+
+      // 👉 GIẢI MÃ VÀ LƯU VÀO STATE
+      _inputWidth = encodedDims >> 16;
+      _inputHeight = encodedDims & 0xFFFF;
+
+      AppLog.info(
+        "🛡️ Nạp Quality Model thành công! Auto Config: ${_inputWidth}x$_inputHeight",
+      );
+
+      isReady = true;
     } catch (e) {
       AppLog.error('⚠️ Lỗi khi khởi tạo model C++: $e');
     }

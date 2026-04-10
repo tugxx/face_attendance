@@ -2,11 +2,11 @@ import 'dart:io';
 import 'dart:ffi';
 import 'dart:math' as math;
 import 'dart:async';
+import 'dart:isolate';
 
 import 'package:uuid/uuid.dart';
 import 'package:ffi/ffi.dart';
 import 'package:camera/camera.dart';
-// import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -28,6 +28,7 @@ import '../../app/services/device_service.dart';
 import '../../app/extensions/app_profiler.dart';
 import '../../app/services/ml_kit_face_service.dart';
 import '../../app/services/face_quality_service.dart';
+import '../../app/services/hive_service.dart';
 
 class FaceCheckinState {
   // Biến cấu hình
@@ -59,33 +60,25 @@ final checkinState = FaceCheckinState();
 class FaceAttendanceController extends GetxController {
   CameraController? cameraController;
 
-  final FaceRecognitionService _recognitionService =
-      Get.find<FaceRecognitionService>();
+  final FaceRecognitionService _recognitionService = FaceRecognitionService();
+  final FaceAntiSpoofingService _spoofService = FaceAntiSpoofingService();
+  final FaceQualityAssessor _qualityService = FaceQualityAssessor();
 
-  final _mlKitService = Get.find<MLKitFaceService>();
-
-  final FaceAntiSpoofingService _spoofService =
-      Get.find<FaceAntiSpoofingService>();
-
-  final FaceQualityAssessor _qualityService = Get.find<FaceQualityAssessor>();
-
-  final FaceIsolateService _isolateService = Get.find<FaceIsolateService>();
+  final FaceIsolateService _isolateService = FaceIsolateService();
+  final MLKitFaceService _mlKitService = MLKitFaceService.forAttendance();
 
   final _smoother = BBoxSmoother();
 
   final AudioPlayer _audioPlayer = AudioPlayer();
 
-  // StreamSubscription<List<ConnectivityResult>>? _networkSubscription;
-
   var isInitialized = false.obs; // Cờ báo hiệu Camera đã bật chưa.
   var recognizedName = "Unknown".obs;
+
   // Cái "khóa" (Lock/Semaphore) để ngăn không cho xử lý quá nhiều frame cùng lúc (tránh tràn RAM).
   var isProcessing = false.obs;
   var isAiReady = false.obs;
   var errorMsg = "".obs;
   final RxBool isSpoofing = false.obs;
-
-  DateTime _lastRecognitionTime = DateTime.fromMillisecondsSinceEpoch(0);
   var detectedFaces = <Face>[].obs;
 
   DateTime _lastBlurWarningTime = DateTime.now();
@@ -101,22 +94,16 @@ class FaceAttendanceController extends GetxController {
   final Map<int, int> _faceAttempts = {};
 
   bool _isIsolateRunning = false;
+  CameraImage? _pendingFrame;
+  bool _isCppBusy = false;
+
+  bool _isDisposing = false;
+
+  int _sessionHandle = 0;
 
   // ------------------------------------------------------
   // HELPER
   // ------------------------------------------------------
-
-  bool _shouldSkipRecognition() {
-    // Nếu chưa đủ 500ms kể từ lần nhận diện trước -> Skip
-    final now = DateTime.now();
-    if (now.difference(_lastRecognitionTime).inMilliseconds < 500) {
-      return true;
-    }
-
-    _lastRecognitionTime = now;
-
-    return false;
-  }
 
   Future<Face?> _detectFaceFromImage(CameraImage image) async {
     // 1. Chuyển đổi dữ liệu
@@ -199,7 +186,18 @@ class FaceAttendanceController extends GetxController {
     }
   }
 
-  Future<void> _handleCheckinSuccess({
+  void _playSuccessSoundAndVibrate() {
+    HapticFeedback.vibrate();
+    _audioPlayer.setVolume(1.0).then((_) {
+      _audioPlayer.play(
+        AssetSource(
+          'sounds/miraclei-sample_confirm_accept01_kofi_by_miraclei-364181.mp3',
+        ),
+      );
+    });
+  }
+
+  Future<void> _saveAndUploadCheckinData({
     required String studentId,
     required double confidence,
     required double livenessScore,
@@ -215,21 +213,6 @@ class FaceAttendanceController extends GetxController {
     bool isHardNegative = false,
     Uint8List? jpegBytes,
   }) async {
-    checkinState.isSuccessCooldown = true; // Khóa hệ thống
-
-    await _audioPlayer.setVolume(1.0);
-    await _audioPlayer.play(
-      AssetSource(
-        'sounds/miraclei-sample_confirm_accept01_kofi_by_miraclei-364181.mp3',
-      ),
-    );
-
-    HapticFeedback.vibrate();
-
-    // AppLog.info("🎉 CHECKIN SUCCESS: $studentId");
-
-    recognizedName.value = studentId;
-
     // 1. Sinh UUID tại App
     final String recordUuid = const Uuid().v4();
     final now = DateTime.now();
@@ -297,37 +280,73 @@ class FaceAttendanceController extends GetxController {
 
     // 3. Bắn thẳng qua WebSocket
     WebSocketService().sendCheckinData(socketPayload);
-
-    // Wait 3 giây rồi reset (Logic Python: success_mode active duration)
-    await Future.delayed(const Duration(seconds: 3));
-
     SyncService().syncPendingRecords();
+  }
 
-    recognizedName.value = "Unknown";
-    checkinState.reset();
-    checkinState.isSuccessCooldown = false; // Mở khóa lại
+  Future<Uint8List> _loadAssetBytes(String path) async {
+    final ByteData data = await rootBundle.load(path);
+    return data.buffer.asUint8List();
   }
 
   // ------------------------------------------------------
   // INIT FUNCTION
   // ------------------------------------------------------
 
+  Future<void> _initAttendanceSession() async {
+    // Kích hoạt trạng thái Loading trên UI
+    isInitialized.value = false;
+    isAiReady.value = false;
+    isProcessing.value = false;
+    errorMsg.value = "";
+
+    try {
+      // 1. Warm-up các tool phụ (Chạy nhanh, không đáng kể)
+      await _mlKitService.warmUp();
+
+      // 2. TẠO VỎ SESSION RỖNG
+      final recogBytes = await _loadAssetBytes(
+        FaceRecognitionService.modelPath,
+      );
+      final spoofBytes = await _loadAssetBytes(
+        FaceAntiSpoofingService.modelPath,
+      );
+      final qualityBytes = await _loadAssetBytes(FaceQualityAssessor.modelPath);
+
+      _sessionHandle = await Isolate.run(() {
+        return FaceImagePipelineNative.createFacePipelineSession(
+          recogBytes: recogBytes,
+          spoofBytes: spoofBytes,
+          qualityBytes: qualityBytes,
+        );
+      });
+
+      if (_sessionHandle == 0) {
+        throw Exception(
+          "C++ từ chối tạo Session (Hết RAM hoặc file TFLite hỏng)!",
+        );
+      }
+
+      final dbService = FaceDatabaseService();
+      await dbService.loadDatabaseIntoSession(_sessionHandle);
+
+      // 4. Khởi động luồng Isolate chuyên dùng để xử lý Frame Camera
+      await _isolateService.start();
+
+      // 5. Bật Camera (Chỉ bật khi AI đã được nạp xong xuôi 100%)
+      await startCamera();
+
+      // 6. Xóa Loading, hiện Camera lên UI
+      isAiReady.value = true;
+    } catch (e) {
+      errorMsg.value = "Lỗi khởi tạo hệ thống AI: $e";
+      AppLog.error("Crash màn hình Attendance: $e");
+    }
+  }
+
   @override
   void onInit() async {
     super.onInit();
-
-    try {
-      // Bắt đầu quy trình khởi tạo
-      isInitialized.value = false;
-      isAiReady.value = false;
-      isProcessing.value = false;
-
-      await startCamera();
-
-      isAiReady.value = true;
-    } catch (e) {
-      errorMsg.value = "Lỗi khởi tạo: $e";
-    }
+    _initAttendanceSession();
   }
 
   Future<void> startCamera() async {
@@ -401,23 +420,47 @@ class FaceAttendanceController extends GetxController {
     }
   }
 
-  void processFrame(CameraImage image) async {
+  void processFrame(CameraImage image) {
     if (checkinState.isSuccessCooldown || recognizedName.value != "Unknown") {
       return;
     }
 
-    if (isProcessing.value) return;
+    _pendingFrame = image;
 
-    // Khoá luồng xử lý nhận diện
+    _consumeQueue();
+  }
+
+  void _consumeQueue() async {
+    if (_isCppBusy || _isDisposing) return;
+
+    _isCppBusy = true;
     isProcessing.value = true;
 
-    final profiler = AppProfiler()..start();
+    try {
+      while (_pendingFrame != null && !_isDisposing) {
+        final currentImageToProcess = _pendingFrame!;
+        _pendingFrame = null;
 
-    Face? face;
+        await _processOneFrame(currentImageToProcess);
+
+        // Nếu đã xong việc thì không cần xử lý frame mới nữa
+        if (checkinState.isSuccessCooldown ||
+            recognizedName.value != "Unknown") {
+          break;
+        }
+      }
+    } finally {
+      _isCppBusy = false; // ← Luôn chạy dù break/return/exception
+      isProcessing.value = false;
+    }
+  }
+
+  Future<void> _processOneFrame(CameraImage image) async {
+    final profiler = AppProfiler()..start();
 
     try {
       // 1. Detect khuôn mặt (ML Kit - Giữ nguyên)
-      face = await profiler.measureStep(
+      final face = await profiler.measureStep(
         "DetectFace",
         () async => _detectFaceFromImage(image),
       );
@@ -428,7 +471,6 @@ class FaceAttendanceController extends GetxController {
         if (checkinState.matchStreak > 0) {
           checkinState.matchStreak = 0;
           checkinState.blurryStreak = 0;
-          // AppLog.warning("❌ Face lost. Reset streak.");
         }
         return;
       }
@@ -440,19 +482,16 @@ class FaceAttendanceController extends GetxController {
         checkinState.blurryStreak = 0; // Xóa sạch tàn dư của người trước!
         if (faceInstruction.value.isNotEmpty) faceInstruction.value = "";
 
-        checkinState.sessionTimer.reset();
-        checkinState.sessionTimer.start();
+        checkinState.sessionTimer
+          ..reset()
+          ..start();
       }
-      final faceRect = _smoother.smooth(face.boundingBox);
 
       if (verifiedFaces.containsKey(currentFaceId)) {
         return; // Đã check-in rồi thì cho CPU nghỉ ngơi
       }
 
-      // 2. Throttling (Giữ nguyên)
-      if (_shouldSkipRecognition()) {
-        return;
-      }
+      final faceRect = _smoother.smooth(face.boundingBox);
 
       // 3. Chuẩn bị dữ liệu gửi sang Isolate
       final int totalBytes = image.planes.fold(
@@ -460,7 +499,7 @@ class FaceAttendanceController extends GetxController {
         (sum, plane) => sum + plane.bytes.length,
       );
 
-      if (nativeBuffer == null || _currentBufferSize != totalBytes) {
+      if (nativeBuffer == null || totalBytes > _currentBufferSize) {
         if (nativeBuffer != null) {
           calloc.free(nativeBuffer!);
         }
@@ -475,6 +514,8 @@ class FaceAttendanceController extends GetxController {
         offset += plane.bytes.length;
       }
 
+      if (_isDisposing) return;
+
       // 4. Gửi sang Isolate
       _isIsolateRunning = true;
       final Map<String, dynamic>? aiResult;
@@ -483,11 +524,12 @@ class FaceAttendanceController extends GetxController {
         aiResult = await profiler.measureStep(
           "IsolateC++",
           () async => await _isolateService.processDualTaskInIsolate(
+            sessionHandle: _sessionHandle,
             address: nativeBuffer!.address,
             width: image.width,
             height: image.height,
             yStride: image.planes[0].bytesPerRow,
-            face: face!,
+            face: face,
             rectX: faceRect.left.toInt(),
             rectY: faceRect.top.toInt(),
             rectW: faceRect.width.toInt(),
@@ -503,14 +545,8 @@ class FaceAttendanceController extends GetxController {
         _isIsolateRunning = false;
       }
 
-      if (checkinState.isSuccessCooldown || recognizedName.value != "Unknown") {
-        isProcessing.value = false;
-        return;
-      }
-
       if (aiResult == null) {
         AppLog.warning("⚠️ Isolate trả về null, bỏ qua frame này");
-        isProcessing.value = false;
         return;
       }
 
@@ -532,14 +568,11 @@ class FaceAttendanceController extends GetxController {
         _faceAttempts.remove(currentFaceId);
         checkinState.matchStreak = 0;
         checkinState.spoofStreak = 0;
-
-        // Phạt 2 giây
         checkinState.isSuccessCooldown = true;
         Future.delayed(const Duration(seconds: 2), () {
           checkinState.isSuccessCooldown = false;
           errorMsg.value = "";
         });
-
         return;
       }
 
@@ -608,17 +641,13 @@ class FaceAttendanceController extends GetxController {
           // Đổi người -> Reset
           checkinState.currentCandidate = detectedName;
           checkinState.matchStreak = 1;
-          // AppLog.info("🔄 Tracking new: $detectedName");
         }
-
-        // AppLog.info(
-        //   "🚀 Verified: $detectedName | Progress: ${checkinState.matchStreak}/3",
-        // );
 
         // Đủ điều kiện check-in
         if (checkinState.matchStreak >=
             FaceCheckinState.requiredRecognitionStreak) {
           checkinState.sessionTimer.stop();
+
           final int totalCheckinTime =
               checkinState.sessionTimer.elapsedMilliseconds;
 
@@ -626,44 +655,63 @@ class FaceAttendanceController extends GetxController {
             "🎉 CHECKIN SUCCESS: $detectedName | ⏱️ TỔNG THỜI GIAN THỰC TẾ (TTC): ${totalCheckinTime}ms",
           );
 
+          final int snapshotSize = _currentBufferSize;
+          final snapshotBuffer = calloc<Uint8>(snapshotSize);
+          snapshotBuffer
+              .asTypedList(snapshotSize)
+              .setAll(0, nativeBuffer!.asTypedList(snapshotSize));
+
           recognizedName.value = checkinState.currentCandidate!;
           verifiedFaces[currentFaceId] = recognizedName.value;
-
           _faceAttempts.remove(currentFaceId);
-
+          if (_faceAttempts.length > 20) {
+            _faceAttempts.clear();
+          }
           checkinState.isSuccessCooldown = true;
 
-          // 1. GỌI HÀM NÉN ẢNH LUÔN (Truyền đúng cái nativeBuffer đang dùng)
-          final jpegBytes = await profiler.measureStep("Encode_JPEG", () async {
-            return FaceImagePipelineNative.encodeYuvToJpeg(
-              ptrYuv: nativeBuffer!,
-              width: image.width,
-              height: image.height,
-              rotation: cameraController?.description.sensorOrientation ?? 0,
-            );
-          });
+          _playSuccessSoundAndVibrate();
 
           final int detectTime = profiler.getMetric("DetectFace") ?? 0;
           final int isolateTime = profiler.getMetric("IsolateC++") ?? 0;
 
-          unawaited(
-            _handleCheckinSuccess(
-              studentId: checkinState.currentCandidate!,
-              confidence: aiScore,
-              livenessScore: spoofScore,
-              qualityScore: qScore,
-              totalCheckinTimeMs: totalCheckinTime,
-              detectTimeMs: detectTime,
-              isolateTimeMs: isolateTime,
-              totalAttempts: _faceAttempts[currentFaceId] ?? 0,
-              spoofStreakEncountered: checkinState.spoofStreak,
-              matchedTemplateId: matchedTemplateId,
-              imposterName: imposterName,
-              margin: margin,
-              isHardNegative: isHardNegative,
-              jpegBytes: jpegBytes,
-            ),
-          );
+          // 1. GỌI HÀM NÉN ẢNH LUÔN (Truyền đúng cái nativeBuffer đang dùng)
+          _isolateService
+              .encodeJpegInIsolate(
+                sessionHandle: _sessionHandle,
+                address: snapshotBuffer.address,
+                width: image.width,
+                height: image.height,
+                rotation: cameraController?.description.sensorOrientation ?? 0,
+              )
+              .then((jpegBytes) {
+                calloc.free(snapshotBuffer);
+                if (jpegBytes != null) {
+                  unawaited(
+                    _saveAndUploadCheckinData(
+                      studentId: checkinState.currentCandidate!,
+                      confidence: aiScore,
+                      livenessScore: spoofScore,
+                      qualityScore: qScore,
+                      totalCheckinTimeMs: totalCheckinTime,
+                      detectTimeMs: detectTime,
+                      isolateTimeMs: isolateTime,
+                      totalAttempts: _faceAttempts[currentFaceId] ?? 0,
+                      spoofStreakEncountered: checkinState.spoofStreak,
+                      matchedTemplateId: matchedTemplateId,
+                      imposterName: imposterName,
+                      margin: margin,
+                      isHardNegative: isHardNegative,
+                      jpegBytes: jpegBytes,
+                    ),
+                  );
+                }
+              });
+
+          Future.delayed(const Duration(seconds: 3), () {
+            recognizedName.value = "Unknown";
+            checkinState.reset();
+            checkinState.isSuccessCooldown = false; // Mở khóa camera
+          });
         }
       } else {
         checkinState.matchStreak = 0;
@@ -716,25 +764,18 @@ class FaceAttendanceController extends GetxController {
       AppLog.error("❌ Lỗi processFrame: $e");
       AppLog.error("Dấu vết (StackTrace):\n$s");
     } finally {
-      // // Tổng kết thời gian 1 frame
-      // sw.stop();
       profiler.report();
-
-      await Future.delayed(const Duration(milliseconds: 400));
-
-      isProcessing.value = false; // Mở khóa để xử lý frame tiếp theo
     }
   }
 
   @override
   void onClose() {
-    // AppLog.info("🧹 Bắt đầu dọn dẹp tài nguyên màn hình Camera...");
-    final wasProcessing = isProcessing.value;
-    isProcessing.value = true;
+    _isDisposing = true;
 
     _audioPlayer.dispose();
     verifiedFaces.clear();
     _faceAttempts.clear();
+    _mlKitService.dispose();
 
     if (cameraController != null) {
       try {
@@ -749,14 +790,12 @@ class FaceAttendanceController extends GetxController {
       }
     }
 
-    _safeFreeMemory(wasProcessing);
+    _safeFreeMemory();
 
     super.onClose();
   }
 
-  Future<void> _safeFreeMemory(bool isAiBusy) async {
-    if (nativeBuffer == null) return;
-
+  Future<void> _safeFreeMemory() async {
     int timeoutCount = 0;
     while (_isIsolateRunning && timeoutCount < 20) {
       // Vòng lặp chờ tối đa 20 * 50ms = 1 giây (Timeout an toàn)
@@ -771,9 +810,16 @@ class FaceAttendanceController extends GetxController {
       );
     }
 
+    if (_sessionHandle != 0) {
+      FaceImagePipelineNative.destroyFacePipelineSession(_sessionHandle);
+      _sessionHandle = 0;
+    }
+
     if (nativeBuffer != null) {
       calloc.free(nativeBuffer!);
       nativeBuffer = null;
     }
+
+    _isolateService.dispose();
   }
 }
